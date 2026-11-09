@@ -1,18 +1,21 @@
 # Metra Tracker+: what's left
 
-Updated 2026-11-09. The app runs against Metra's **real** schedule and **live** feeds (tested with the real API key). All 24 tests pass. What's left is deployment, a few real-world checks, and the improvements below.
+Updated 2026-11-09. The app runs against Metra's **real** schedule and **live** feeds (tested with the real API key). 40 tests pass. CI is green and publishes a ready-to-run Docker image on every push to `main`. What's left is deployment, real-world checks, and new features.
 
 ## 1. Deploy on the server (SERVER-IP): do first
 
-- [ ] Clone to `/mnt/user/appdata/metra-tracker-plus-src`.
-- [ ] Build: `docker build -t metra-tracker-plus:latest .`, **or** skip building and set the template's Repository to `ghcr.io/heyimdownhere/metra-tracker-plus:latest`. The Dockerfile now builds successfully on GitHub, and CI publishes that image on every push to `main`. If the server can't pull it, check the package is public: GitHub → profile → Packages → metra-tracker-plus → Package settings.
-- [ ] Copy `unraid/metra-tracker-plus.xml` to `/boot/config/plugins/dockerMan/templates-user/`, then add the container from the template.
-- [ ] Put the API key in `METRA_API_TOKEN` (masked field). The status pill should show **Live**.
-- [ ] Open `http://SERVER-IP:8080`. Check the WebUI button and that Docker health shows **healthy**.
+- [ ] Copy `unraid/metra-tracker-plus.xml` to `/boot/config/plugins/dockerMan/templates-user/` (from a clone of the repo, or download the file from GitHub).
+- [ ] In Unraid, go to **Docker → Add Container** and choose the template. Set **Repository** to `ghcr.io/heyimdownhere/metra-tracker-plus:latest` to use the published image; no building needed. If the pull is refused, make the package public: GitHub → profile → Packages → metra-tracker-plus → Package settings. (Alternative: clone the repo and run `docker build -t metra-tracker-plus:latest .`.)
+- [ ] Fill in the template fields:
+  - **Metra API key** (masked).
+  - Optional: **Home station**, **Work station**, **Commute switch time**, **Workdays**. These can be left empty and set in the app instead.
+  - Leave **Web UI port** at 8080 unless that port is taken.
+- [ ] Click **Apply**, then check the container log. It starts with a settings summary (API key masked) and warns about any value it couldn't use.
+- [ ] Open `http://SERVER-IP:8080`. Check that the status pill shows **Live**, the WebUI button works, and Docker health shows **healthy**.
+- [ ] If home and work weren't set in Unraid, use the **Set up your commute** card or the briefcase button.
 - [ ] Check that `/mnt/user/appdata/metra-tracker/` contains `gtfs/`, `history.db` and `settings.json`, and that a restart is fast.
-- [ ] Set your home station in the app (⌂ Set as home).
 
-## 2. Check in a real browser / over time
+## 2. Check in real use
 
 Map tiles were blocked in the dev sandbox, so these have never been seen drawing:
 
@@ -21,64 +24,52 @@ Map tiles were blocked in the dev sandbox, so these have never been seen drawing
 - [ ] Estimated train positions (schedule-only mode) sit on the lines, especially the ME and RI branches.
 - [ ] Refresh the README screenshots once the map tiles show (current ones have a blank map background).
 
-Over the first days of real use:
+Over the first days and weeks:
 
+- [ ] Morning and evening: the app opens on the right trip (home → work before the switch time, work → home after), and flips over by itself if it's open at the switch time.
 - [ ] Compare a delayed train's predictions with Metra's own app.
-- [ ] After a day or two, look at `/api/history/station?station=EVANSTON` to see whether the on-time stats look sensible.
+- [ ] Watch for the **Tracking** badge (GPS-based delay estimate). It hasn't been seen on a real in-service train yet, because every in-service train had a Metra prediction during testing.
+- [ ] After about a week, on-time history lines ("90% on time · avg 3 min late") should start appearing. Check that they look sensible.
 - [ ] railsmaps.com: check its license. If reuse is allowed, add it as a basemap in `web/map.js`; otherwise drop it.
 
 ## 3. Home Assistant
 
-- [ ] Pick a notify service (`notify.mobile_app_…`) and stations. `/api/home` uses the saved home station; `/api/next?station=…&direction=inbound` gives the next trains to downtown.
-- [ ] Add `docs/home-assistant.yaml` to the HA repo (`(private Home Assistant repo)`) as a package; check how `configuration.yaml` is organized first.
-- [ ] Set the time and weekdays; maybe add an evening reverse commute. Run it manually once to test.
+- [ ] Find your phone's notify service (`notify.mobile_app_…`).
+- [ ] Use `http://SERVER-IP:8080/api/now` as the sensor resource. It returns the right trip for the time of day, so no stations are hard-coded. (`docs/home-assistant.yaml` has a working example using `/api/commute`; swap the URL.)
+- [ ] Add it to the HA repo (`(private Home Assistant repo)`) as a package; check how `configuration.yaml` is organized first.
+- [ ] Set the notification time and weekdays. Run it manually once to test.
 
-## 4. Review suggestions: done 2026-11-09
+## 4. Next features
 
-All implemented, tested (34 tests) and checked on live Metra data:
-
-- [x] Gzip compression: map library 1.06 MB → 276 KB, train list 16 KB → 2.8 KB per refresh.
-- [x] No polling while the app is hidden or the phone is locked (0 requests in 65 s hidden; refreshes on return).
-- [x] Stale positions (no update for 3+ min) dropped from the map.
-- [x] "Live" checks the age of Metra's data, not just that the request worked; the pill shows "Live · N min old".
-- [x] Alerts banner only features alerts for your lines; the rest sit behind "N on other lines".
-- [x] **Tracking** badge with a GPS-based delay estimate for trains Metra tracks but sends no prediction for. Live data showed most such "trains" were actually **parked or running empty after their trip ended**. Those are now hidden from the map: 41 → 28 trains, all real.
-- [x] Next stop always shown (GPS-based when needed; the terminal when arriving).
-- [x] Countdowns corrected to the server's clock.
-- [x] Amber for 1–5 min late, red for 6+ (Metra's on-time rule).
-- [x] Departures never shown before their scheduled time (arrival estimates still can be early).
-- [x] Track code and UI removed (Metra doesn't send tracks).
-- [x] Station names cleaned ("Lake Forest." → "Lake Forest") and duplicates labelled: "Lake Forest (MD-N)" / "Lake Forest (UP-N)", "Prairie Crossing (MD-N)" / "(NCS)".
-- [x] Per-trip prediction lookups cached; lookback for very late trains extended from 2 h to 4 h.
-- [x] `/api/status` reports `realtime_age`; `/healthz` still ignores realtime on purpose, so Metra outages don't restart the container.
-- [x] GitHub Actions: tests on every push; Docker image published to GHCR on `main` (optional for Unraid; see README).
-- [x] App icon (PWA, iPhone home screen, Unraid template). History backup documented in the README.
-
-Still to check: the **Tracking** estimate itself hasn't been seen on a real in-service train yet, because every in-service train had a Metra prediction during testing. Watch for the "Tracking" badge and compare it with reality.
-
-## 5. Next features (picked 2026-11-09)
-
-- [ ] **"Leave now" alerts.** Set how long it takes to get to your station; get told when to leave, adjusted for live delays ("Leave by 7:04 for the 7:12, running 3 min late"). Deliver via Home Assistant (`notify.mobile_app_…`) or ntfy.
-- [x] **Switch direction by time of day** (done 2026-11-09): work station, switch time and workdays, set in the app (briefcase button, searchable pickers) or via `WORK_STATION` / `COMMUTE_SWITCH_TIME` / `WORK_DAYS`. `/api/now` and `/api/work` endpoints.
-- [ ] **Alerts for your own stations.** Feature station-level alerts (elevator outages, entrance closures) for your home/work stations, and notify when one affects your train.
+- [ ] **"Leave now" alerts.** Set how long it takes to get to your station; get told when to leave, adjusted for live delays ("Leave by 7:04 for the 7:12, running 3 min late"). It can use the home/work profile and `/api/now`. Deliver via Home Assistant (`notify.mobile_app_…`) or ntfy.
+- [ ] **Alerts for your own stations.** Feature station-level alerts (elevator outages, entrance closures) for your home and work stations, and notify when one affects your train.
 - [ ] **Remote access with Tailscale.** Install the Tailscale plugin on Unraid so your phone reaches the server from anywhere, privately. Don't port-forward 8080: the app has no login.
 
-## 6. Ideas
+## 5. Ideas
 
-- [ ] **Wall-display mode** (`/?kiosk`): only the home board in large type, for a tablet by the door.
+- [ ] **Wall-display mode** (`/?kiosk`): only the current commute board in large type, for a tablet by the door.
 - [ ] A small history page with charts (per-train on-time trend, worst days).
 - [ ] Store train positions in history too (currently predictions, cancellations and alerts only).
+- [ ] Update GitHub Actions versions to clear the "Node.js 20 is deprecated" warning.
+- [ ] Run the container as a non-root user (Unraid's 99:100).
+- [ ] Shrink old history: full detail for 90 days, then daily summaries (about 1 GB/year → tens of MB).
 
 ## Done
 
-- **On-time history on the board** (2026-11-09): each departure shows e.g. "90% on time · avg 3 min late · 21 days", from the last 30 days of this train at this station on the same kind of day (weekday/Saturday/Sunday). It only appears once a train has been seen on 5+ days, so it starts showing about a week after deploying with the API key. Also in `/api/next` and `/api/commute` as `history`.
+**Setup and configuration**
+- Every setting can be set by environment variable (Unraid template, `.env` / `.env.example` for compose, `docker run -e`), with defaults and validation. Invalid values are logged and fall back instead of crashing. A startup log summary shows the settings with the API key masked. `METRA_API_TOKEN_FILE` supports Docker secrets.
+- **Home + work commute**: work station, switch time (presets Noon–7 PM) and workdays. On workdays the app opens on home → work before the switch time and work → home after; other days on the home board. Settable in the app (briefcase button with searchable station pickers, "Set as home" / "Set as work") or by env (`HOME_STATION`, `WORK_STATION`, `COMMUTE_SWITCH_TIME`, `WORK_DAYS`). App-saved values win; unset ones fall back to env. A fresh install shows a "Set up your commute" card. Adds `/api/now` and `/api/work`.
 
-- CI fixed and green (2026-11-09): tests couldn't import the app under plain `pytest` (fixed with `pytest.ini`). The two workflows were merged into `ci.yml`: tests on every push, and the image is built and published to GHCR from `main`. The first runs also hit a GitHub-side "Internal server error" before any job started; that wasn't our code.
-
-- Live Metra feeds verified: Bearer token works; trip IDs match the schedule; `vehicle.label` is the train number; ~146 untripped yard vehicles hidden; line-wide alerts filtered so only delay-related ones explain delays. Metra doesn't send track numbers, and its feed often returns 500/504 errors; the app keeps the last good data and retries.
+**Board and map**
+- On-time history per departure ("90% on time · avg 3 min late · 21 days"): last 30 days of this train at this station on the same kind of day. Shown after 5+ days of data.
+- Home station shared by all devices; estimated arrival at each train's final stop, shown as ~~scheduled~~ estimate; AM/PM kept on one line.
 - Line-name search ("upn"), optional **Going to** with arrival times, swap button.
-- **Home station** (server-side, shared by all devices) and estimated arrival at each train's final stop, shown as ~~scheduled~~ estimate.
-- AM/PM kept on one line.
-- `/api/next?station=…&direction=inbound|outbound`.
-- Metra polled at most once per 30 s, enforced in code and verified live (~8,000 API requests → 3 polls per feed in 70 s).
-- Code-review fixes: a poll-timing bug that halved refresh rate (60 s instead of 30 s), ambiguous station names, realtime-only trains listed at their final stop, 500 errors during startup, export memory use, duplicated code.
+- Tracking badge (GPS delay estimate); parked or out-of-service trains hidden (41 → 28 real trains on the live map); next stop always shown; departures never shown before schedule; amber 1–5 min late, red 6+; countdowns on server time; alerts banner limited to your lines; station names cleaned ("Lake Forest (UP-N)"); map popup title no longer runs into the close button.
+
+**Data, performance and reliability**
+- Live Metra feeds verified: the Bearer token works, trip IDs match the schedule, and `vehicle.label` is the train number. Metra doesn't send track numbers, and its feed often returns 500/504 errors; the app keeps the last good data and retries.
+- Metra polled at most once per 30 s, enforced in code and verified live (~8,000 API requests → 3 polls per feed in 70 s). A code-review fix for a poll-timing bug restored the true 30 s refresh (it was 60 s).
+- Gzip (map library 1.06 MB → 276 KB, trains 16 KB → 2.8 KB); no polling while the app is hidden; stale positions dropped; "Live" checks the age of Metra's data.
+- `/api/next?station=…&direction=inbound|outbound`, `/api/commute`, `/api/home`, history API and CSV export.
+- CI: tests on every push and a Docker image published to GHCR from `main` (fixed: tests couldn't import the app under plain `pytest`; GitHub-side errors on the first runs weren't our code).
+- App icons, Unraid template icon, README sections on data use, backups and pulling the published image.
