@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>metra-tracker-plus</Name>
+  <Repository>metra-tracker-plus:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project/>
+  <Overview>Self-hosted live Metra train tracker: map of all lines with live train positions, a departure board for your station, service alerts, long-term delay history, and a Home Assistant-friendly commute API. Uses Metra's GTFS schedule and GTFS-Realtime feeds (server-side only). Runs schedule-only until METRA_API_TOKEN is set.</Overview>
+  <Category>Tools: Status:Stable</Category>
+  <WebUI>http://[IP]:[PORT:8080]</WebUI>
+  <TemplateURL/>
+  <Icon/>
+  <ExtraParams>--restart=unless-stopped</ExtraParams>
+  <PostArgs/>
+  <CPUset/>
+  <DateInstalled/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Build the image on the server first: docker build -t metra-tracker-plus:latest /mnt/user/appdata/metra-tracker-plus-src</Requires>
+  <Config Name="Web UI port" Target="8080" Default="8080" Mode="tcp" Description="Port for the web UI and JSON API." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
+  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/metra-tracker" Mode="rw" Description="Cached Metra schedule and history database." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/metra-tracker</Config>
+  <Config Name="METRA_API_TOKEN" Target="METRA_API_TOKEN" Default="" Mode="" Description="Your Metra GTFS-Realtime API token. Leave empty for schedule-only mode." Type="Variable" Display="always" Required="false" Mask="true"></Config>
+  <Config Name="TZ" Target="TZ" Default="America/Chicago" Mode="" Description="Container timezone." Type="Variable" Display="always" Required="false" Mask="false">America/Chicago</Config>
+  <Config Name="HISTORY_DAYS" Target="HISTORY_DAYS" Default="365" Mode="" Description="Days of realtime delay/alert history to keep in /config/history.db. 0 disables history." Type="Variable" Display="advanced" Required="false" Mask="false">365</Config>
+  <Config Name="REALTIME_INTERVAL" Target="REALTIME_INTERVAL" Default="30" Mode="" Description="Seconds between realtime polls. Minimum 30 (Metra's limit)." Type="Variable" Display="advanced" Required="false" Mask="false">30</Config>
+</Container>

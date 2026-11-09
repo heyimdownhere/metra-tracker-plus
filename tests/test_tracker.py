@@ -1,0 +1,243 @@
+"""Unit tests using a tiny synthetic GTFS feed and hand-built GTFS-RT messages."""
+
+from __future__ import annotations
+
+import time
+import zipfile
+from datetime import date, datetime
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pytest
+from google.transit import gtfs_realtime_pb2 as pb
+
+from app import realtime as rtp
+from app.config import Settings
+from app.static_gtfs import StaticCache, parse_gtfs_zip
+from app.tracker import Tracker
+
+TZ = ZoneInfo("America/Chicago")
+TODAY = date(2026, 11, 9)  # a Monday
+NOW = datetime(2026, 11, 9, 7, 50, tzinfo=TZ).timestamp()
+
+# Metra's files have spaces after commas; mimic that.
+FILES = {
+    "agency.txt": "agency_id, agency_name, agency_url, agency_timezone\nMETRA, Metra, http://x, America/Chicago\n",
+    "routes.txt": "route_id, route_short_name, route_long_name, route_type, route_color, route_text_color\n"
+                  "L1, L1, Line One, 2, 112233, FFFFFF\nL2, L2, Line Two, 2, 445566, FFFFFF\n",
+    "stops.txt": "stop_id, stop_name, stop_lat, stop_lon\n"
+                 "A, Alpha, 41.90, -88.10\nB, Bravo, 41.90, -88.00\nC, Central, 41.88, -87.64\n",
+    "calendar.txt": "service_id, monday, tuesday, wednesday, thursday, friday, saturday, sunday, start_date, end_date\n"
+                    "WK, 1, 1, 1, 1, 1, 0, 0, 20261101, 20261130\nWE, 0, 0, 0, 0, 0, 1, 1, 20261101, 20261130\n",
+    "calendar_dates.txt": "service_id, date, exception_type\nWK, 20261126, 2\n",
+    "trips.txt": "route_id, service_id, trip_id, trip_headsign, shape_id, direction_id\n"
+                 "L1, WK, t-0800, Central, S1, 1\n"
+                 "L1, WK, t-0830, Central, S1, 1\n"
+                 "L1, WE, t-we, Central, S1, 1\n"
+                 "L2, WK, u-0815, Central, , 1\n",
+    "stop_times.txt": "trip_id, arrival_time, departure_time, stop_id, stop_sequence\n"
+                      "t-0800,  08:00:00,  08:00:00, A, 1\n"
+                      "t-0800,  08:10:00,  08:10:00, B, 2\n"
+                      "t-0800,  08:40:00,  08:40:00, C, 3\n"
+                      "t-0830,  08:30:00,  08:30:00, A, 1\n"
+                      "t-0830,  08:40:00,  08:40:00, B, 2\n"
+                      "t-0830,  09:10:00,  09:10:00, C, 3\n"
+                      "t-we,  08:00:00,  08:00:00, A, 1\n"
+                      "t-we,  08:40:00,  08:40:00, C, 2\n"
+                      "u-0815,  08:15:00,  08:15:00, A, 1\n"
+                      "u-0815,  ,  , B, 2\n"
+                      "u-0815,  08:55:00,  08:55:00, C, 3\n",
+    "shapes.txt": "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n"
+                  "S1,41.90,-88.10,1\nS1,41.90,-88.00,2\nS1,41.88,-87.64,3\n",
+}
+
+
+@pytest.fixture()
+def tracker(tmp_path: Path) -> Tracker:
+    zp = tmp_path / "schedule.zip"
+    with zipfile.ZipFile(zp, "w") as zf:
+        for name, body in FILES.items():
+            zf.writestr(name, body)
+    settings = Settings(
+        api_token="test", config_dir=tmp_path, static_url="", published_url="",
+        realtime_base="", realtime_interval=30, static_check_interval=300, port=8080,
+    )
+    t = Tracker(settings)
+    t.static = parse_gtfs_zip(zp, "v1")
+    return t
+
+
+def _feed(*entities) -> pb.FeedMessage:
+    msg = pb.FeedMessage()
+    msg.header.gtfs_realtime_version = "2.0"
+    msg.header.timestamp = int(NOW)
+    for e in entities:
+        msg.entity.append(e)
+    return msg
+
+
+def _tu(trip_id, stus, relationship=pb.TripDescriptor.SCHEDULED, **trip_fields):
+    e = pb.FeedEntity(id="tu-" + trip_id)
+    e.trip_update.trip.trip_id = trip_id
+    e.trip_update.trip.schedule_relationship = relationship
+    for k, v in trip_fields.items():
+        setattr(e.trip_update.trip, k, v)
+    for stop_id, delay in stus:
+        s = e.trip_update.stop_time_update.add()
+        s.stop_id = stop_id
+        s.departure.delay = delay
+    return e
+
+
+def _alert(aid, cause=None, header="", trip_id=None, route_id=None):
+    e = pb.FeedEntity(id=aid)
+    if cause is not None:
+        e.alert.cause = cause
+    e.alert.header_text.translation.add(text=header, language="en")
+    ie = e.alert.informed_entity.add()
+    if trip_id:
+        ie.trip.trip_id = trip_id
+    if route_id:
+        ie.route_id = route_id
+    return e
+
+
+def _apply(t: Tracker, updates=(), alerts=()):
+    t.rt.trip_updates = rtp.parse_trip_updates(_feed(*updates))
+    t.rt.alerts = rtp.parse_alerts(_feed(*alerts))
+    for st in t.rt.status.values():
+        st.last_success = time.time()
+    t._reindex_realtime()
+
+
+def test_parses_padded_csv_and_calendar(tracker):
+    s = tracker.static
+    assert set(s.routes) == {"L1", "L2"}
+    assert s.routes["L1"]["color"] == "#112233"
+    assert s.active_services(TODAY) == {"WK"}
+    assert s.active_services(date(2026, 11, 26)) == frozenset()  # removed by calendar_dates
+    # blank non-timepoint time interpolated
+    assert [x[3] for x in s.trip_stops["u-0815"]] == [8 * 3600 + 900, 8 * 3600 + 35 * 60, 8 * 3600 + 55 * 60]
+
+
+def test_schedule_departures(tracker):
+    tracker.settings = tracker.settings.__class__(**{**tracker.settings.__dict__, "api_token": None})
+    rows = tracker.departures("A", limit=3, now=NOW)["departures"]
+    assert [r["trip_id"] for r in rows] == ["t-0800", "u-0815", "t-0830"]
+    assert all(not r["live"] for r in rows)
+    # Final stop is arrival-only, so Central isn't a departure station.
+    assert "C" not in {x["id"] for x in tracker.stations()}
+    with pytest.raises(KeyError):
+        tracker.departures("C", now=NOW)
+
+
+def test_realtime_overrides_and_propagates(tracker):
+    _apply(tracker, [_tu("t-0800", [("A", 300)])])
+    rows = {r["trip_id"]: r for r in tracker.departures("B", now=NOW)["departures"]}
+    r = rows["t-0800"]
+    assert r["live"] and r["delay"] == 300
+    assert r["time"] - r["scheduled"] == 300  # propagated downstream from A to B
+    assert not rows["t-0830"]["live"]  # no RT -> schedule fallback
+
+
+def test_cancelled_trip(tracker):
+    _apply(tracker, [_tu("t-0830", [], relationship=pb.TripDescriptor.CANCELED)])
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    assert rows["t-0830"]["cancelled"]
+
+
+def test_resolves_unknown_trip_id_by_start_time(tracker):
+    # New-format realtime trip_id that doesn't exist in static GTFS.
+    e = _tu("NEW-FORMAT-123", [("A", 120)], route_id="L1", start_time="08:30:00", start_date="20261109")
+    _apply(tracker, [e])
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    assert rows["t-0830"]["live"] and rows["t-0830"]["delay"] == 120
+
+
+def test_delay_reason_prefers_trip_alert_cause(tracker):
+    _apply(
+        tracker,
+        [_tu("t-0800", [("A", 600)])],
+        [
+            _alert("route", pb.Alert.WEATHER, "Weather delays on L1", route_id="L1"),
+            _alert("trip", pb.Alert.TECHNICAL_PROBLEM, "Train 0800 mechanical", trip_id="t-0800"),
+        ],
+    )
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    assert rows["t-0800"]["delay_reason"] == "Technical problem"
+
+
+def test_delay_reason_route_fallback_uses_text_when_cause_unknown(tracker):
+    _apply(
+        tracker,
+        [_tu("t-0800", [("A", 600)]), _tu("t-0830", [("A", 0)])],
+        [
+            _alert("route", pb.Alert.UNKNOWN_CAUSE, "Freight interference near Bravo", route_id="L1"),
+            # Trip-specific alert for another train must not leak via the route fallback.
+            _alert("other", pb.Alert.ACCIDENT, "Other train", trip_id="u-0815"),
+        ],
+    )
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    assert rows["t-0800"]["delay_reason"] == "Freight interference near Bravo"
+    assert rows["t-0830"]["delay_reason"] is None  # on time -> no reason shown
+
+
+def test_delay_reason_absent_cause_field_falls_back_to_text(tracker):
+    _apply(tracker, [_tu("t-0800", [("A", 600)])], [_alert("a", None, "Signal problems", trip_id="t-0800")])
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    assert rows["t-0800"]["delay_reason"] == "Signal problems"
+
+
+def test_estimated_trains(tracker):
+    at = datetime(2026, 11, 9, 8, 5, tzinfo=TZ).timestamp()
+    trains = tracker._estimated_trains(at)
+    t = next(x for x in trains if x["trip_id"] == "t-0800")
+    assert -88.10 < t["lon"] < -88.00 and t["next_stop"] == "Bravo"
+
+
+def test_cache_roundtrip(tracker, tmp_path):
+    cache = StaticCache(tmp_path / "cfg")
+    cache.save_pickle(tracker.static)
+    loaded = cache.load()
+    assert loaded and loaded.version == "v1" and set(loaded.trips) == set(tracker.static.trips)
+
+
+def test_commute_only_trips_serving_both_stations(tracker):
+    _apply(tracker, [_tu("t-0800", [("A", 300)])], [_alert("w", pb.Alert.WEATHER, "Snow", route_id="L1")])
+    c = tracker.commute("A", "C", limit=3, now=NOW)
+    assert [t["line"] for t in c["trips"]] == ["L1", "L2", "L1"]
+    first = c["trips"][0]
+    assert first["status"] == "5 min late" and first["delay_reason"] == "Weather"
+    assert first["duration_min"] == 40 and first["arrival"].startswith("2026-11-09T08:45")
+    assert c["next_minutes"] == 15 and "Alpha" in c["message"] and "5 min late: Weather" in c["message"]
+    # Wrong direction: nothing goes from Central back to Alpha.
+    with pytest.raises(KeyError):
+        tracker.commute("C", "A", now=NOW)
+    assert tracker.commute("B", "A", now=NOW)["trips"] == []
+
+
+def test_history_records_and_summarises(tracker, tmp_path):
+    from app.history import History
+
+    h = History(tmp_path / "h.db", 30)
+    h.open()
+    tracker.history = h
+    _apply(tracker, [_tu("t-0800", [("A", 600)]), _tu("t-0830", [], relationship=pb.TripDescriptor.CANCELED)],
+           [_alert("x", pb.Alert.STRIKE, "Strike", route_id="L1")])
+    sched_0800 = datetime(2026, 11, 9, 8, 0, tzinfo=TZ).timestamp()
+    rows = tracker._observation_rows(sched_0800 - 600)
+    h.record_observations(rows)
+    h.record_alerts(tracker.rt.alerts)
+    by_trip_stop = {(r[1], r[2]): r for r in rows}
+    assert by_trip_stop[("t-0800", "A")][8] == 600 and by_trip_stop[("t-0800", "A")][10] == "Strike"
+    assert by_trip_stop[("t-0830", "A")][9] is True
+    # Second poll with a smaller delay updates the row but keeps the max.
+    _apply(tracker, [_tu("t-0800", [("A", 120)])])
+    h.record_observations(tracker._observation_rows(sched_0800 - 300))
+    obs = {(r["trip_id"], r["stop_id"]): r for r in h.iter_observations(3650)}
+    assert obs[("t-0800", "A")]["delay"] == 120 and obs[("t-0800", "A")]["max_delay"] == 600
+    stats = h.station_reliability(["A"], 3650, lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%H:%M"))
+    by_time = {s["scheduled_time"]: s for s in stats}
+    assert by_time["08:00"]["on_time_pct"] == 100.0 and by_time["08:30"]["cancelled"] == 1
+    assert h.alerts(3650)[0]["header"] == "Strike"
+    assert h.stats()["observations"] == len(obs)

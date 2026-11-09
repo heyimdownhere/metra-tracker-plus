@@ -1,0 +1,65 @@
+# Home Assistant example: morning Metra commute notification.
+#
+# 1. Find your station IDs at http://SERVER-IP:8080/api/stations
+#    (the "id" field, e.g. NAPERVILLE, CUS = Chicago Union Station, OTC = Ogilvie).
+# 2. Replace FROM/TO below and notify.mobile_app_YOUR_PHONE with your phone's notify service.
+# 3. Paste into configuration.yaml (or a package file) and restart Home Assistant.
+
+rest:
+  - resource: "http://SERVER-IP:8080/api/commute?from=NAPERVILLE&to=CUS&limit=3"
+    scan_interval: 60
+    sensor:
+      - name: "Metra commute next train"
+        unique_id: metra_commute_next_train
+        device_class: timestamp
+        value_template: "{{ value_json.next_departure }}"
+        json_attributes:
+          - next_minutes
+          - next_status
+          - message
+          - trips
+          - from
+          - to
+          - realtime
+      - name: "Metra commute status"
+        unique_id: metra_commute_status
+        value_template: "{{ value_json.next_status or 'none' }}"
+
+automation:
+  # Weekday morning summary of the next three trains.
+  - id: metra_morning_commute
+    alias: "Metra: morning commute summary"
+    trigger:
+      - platform: time
+        at: "06:45:00"
+    condition:
+      - condition: time
+        weekday: [mon, tue, wed, thu, fri]
+    action:
+      - service: homeassistant.update_entity
+        target:
+          entity_id: sensor.metra_commute_next_train
+      - delay: "00:00:03"
+      - service: notify.mobile_app_YOUR_PHONE
+        data:
+          title: "🚆 Metra to work"
+          message: "{{ state_attr('sensor.metra_commute_next_train', 'message') }}"
+
+  # Optional: heads-up if the next train turns late or cancelled during the commute window.
+  - id: metra_commute_problem
+    alias: "Metra: commute train late or cancelled"
+    trigger:
+      - platform: state
+        entity_id: sensor.metra_commute_status
+    condition:
+      - condition: time
+        after: "06:00:00"
+        before: "09:00:00"
+        weekday: [mon, tue, wed, thu, fri]
+      - condition: template
+        value_template: "{{ 'late' in trigger.to_state.state or trigger.to_state.state == 'cancelled' }}"
+    action:
+      - service: notify.mobile_app_YOUR_PHONE
+        data:
+          title: "⚠️ Metra delay"
+          message: "{{ state_attr('sensor.metra_commute_next_train', 'message') }}"

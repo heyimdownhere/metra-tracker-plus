@@ -1,0 +1,16 @@
+services:
+  metra-tracker-plus:
+    build: .
+    image: metra-tracker-plus:latest
+    container_name: metra-tracker-plus
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - /mnt/user/appdata/metra-tracker:/config
+    environment:
+      # Leave empty to run schedule-only until your Metra API key arrives.
+      - METRA_API_TOKEN=${METRA_API_TOKEN:-}
+      - TZ=America/Chicago
+      # Days of realtime history kept in /config/history.db (0 disables).
+      - HISTORY_DAYS=365

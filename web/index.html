@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0f1216">
+  <meta name="color-scheme" content="dark light">
+  <title>Metra Tracker+</title>
+  <link rel="icon" href="favicon.svg" type="image/svg+xml">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="stylesheet" href="vendor/maplibre/maplibre-gl.css">
+  <link rel="stylesheet" href="style.css">
+  <script>
+    // Apply saved theme before first paint to avoid a flash.
+    (function () {
+      var t = localStorage.getItem("metra.theme");
+      if (!t) t = matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+      document.documentElement.dataset.theme = t;
+    })();
+  </script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h10a4 4 0 0 1 4 4v9a4 4 0 0 1-3 3.87l1.7 2.55a1 1 0 1 1-1.66 1.1L15.96 19H8.04l-2.08 3.52a1 1 0 0 1-1.72-1.02L5.95 18.9A4 4 0 0 1 3 15V6a4 4 0 0 1 4-4Zm-1 5v4h12V7H6Zm2 7.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm8 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/></svg>
+      <h1>Metra Tracker<span>+</span></h1>
+    </div>
+    <div class="topbar-right">
+      <span id="mode-pill" class="pill" title="">Loading…</span>
+      <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle light/dark mode">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <section id="alerts" class="alerts" hidden>
+    <button id="alerts-toggle" class="alerts-summary" type="button" aria-expanded="false">
+      <span class="alert-icon" aria-hidden="true">⚠</span>
+      <span id="alerts-headline"></span>
+      <span id="alerts-count" class="alerts-count"></span>
+    </button>
+    <ul id="alerts-list" class="alerts-list" hidden></ul>
+  </section>
+
+  <main class="layout">
+    <aside class="panel">
+      <div class="picker">
+        <label for="station-input" class="picker-label">Station</label>
+        <div class="picker-box">
+          <input id="station-input" type="search" autocomplete="off" spellcheck="false"
+                 placeholder="Search stations…" role="combobox" aria-expanded="false"
+                 aria-controls="station-list" aria-autocomplete="list">
+          <ul id="station-list" class="station-list" role="listbox" hidden></ul>
+        </div>
+      </div>
+
+      <div class="board">
+        <div class="board-head">
+          <h2 id="board-title">Choose a station</h2>
+          <span id="board-updated" class="muted small"></span>
+        </div>
+        <ol id="board-list" class="board-list"></ol>
+        <p id="board-empty" class="muted board-empty" hidden></p>
+      </div>
+      <footer class="credits muted small">
+        Schedule &amp; realtime data provided by Metra. Not affiliated with Metra.
+        <span id="data-version"></span>
+      </footer>
+    </aside>
+
+    <section class="map-wrap">
+      <div id="map" aria-label="Map of Metra lines and trains"></div>
+      <button id="map-settings-btn" class="map-settings-btn" type="button" aria-label="Map settings" aria-expanded="false" aria-controls="map-settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm-8.1 9.05L12 15.1l8.1-4.05L22 12l-10 5-10-5 1.9-.95Zm0 5L12 20.1l8.1-4.05L22 17l-10 5-10-5 1.9-.95Z"/></svg>
+      </button>
+      <div id="map-settings" class="map-settings" hidden></div>
+      <div id="map-note" class="map-note" hidden></div>
+    </section>
+  </main>
+
+  <script src="vendor/maplibre/maplibre-gl.js"></script>
+  <script src="map.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
