@@ -329,7 +329,9 @@
   // "Not set", time and days show their defaults. Values that come from the
   // Docker/Unraid settings are labelled, and only sent back if changed.
   const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-  const TIME_PRESETS = [["10:00", "10 AM"], ["11:00", "11 AM"], ["12:00", "Noon"], ["13:00", "1 PM"], ["14:00", "2 PM"]];
+  // Typical times to start looking at trains home; any other time can be typed in.
+  const TIME_PRESETS = [["12:00", "Noon"], ["14:00", "2 PM"], ["15:00", "3 PM"], ["16:00", "4 PM"],
+    ["17:00", "5 PM"], ["18:00", "6 PM"], ["19:00", "7 PM"]];
   const draft = { home: null, work: null };
   const homePick = makePicker({
     inputId: "cm-home", listId: "cm-home-list", allowClear: true, clearLabel: "Not set",
