@@ -324,6 +324,23 @@
     return `<s class="was">${fmtTime(scheduled)}</s> ${est}`;
   }
 
+  // "On time 85% · avg 3 min late · 30 days": this train's record at this
+  // station on the same kind of day (weekday/Sat/Sun). Server only sends it
+  // once the train has been seen on enough days.
+  function historyHtml(h) {
+    if (!h) return "";
+    const days = `${h.observations} days`;
+    if (h.on_time_pct == null) return `<div class="hist"><span class="bad">Cancelled</span> on all ${days} seen</div>`;
+    const pct = Math.round(h.on_time_pct);
+    const cls = pct >= 90 ? "good" : pct >= 75 ? "ok" : "bad";
+    const avg = Math.round(h.avg_delay_min || 0);
+    const parts = [`<span class="${cls}">${pct}%</span> on time`];
+    if (avg >= 1) parts.push(`avg ${avg} min late`);
+    if (h.cancelled) parts.push(`${h.cancelled} cancelled`);
+    parts.push(days);
+    return `<div class="hist" title="Based on the last ${h.days} days of Metra's predictions for this train at this station (weekdays, Saturdays and Sundays counted separately). Metra counts under 6 minutes late as on time.">${parts.map((x) => `<span class="part">${x}</span>`).join(" · ")}</div>`;
+  }
+
   function renderBoard() {
     const d = state.departures;
     if (!d) return;
@@ -359,6 +376,7 @@
         <div class="meta">${meta}</div>
         ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)} · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
         ${finalHtml(r, d)}
+        ${historyHtml(r.history)}
         ${r.delay_reason ? `<div class="reason" title="${esc(r.delay_reason)}">${esc(r.delay_reason)}</div>` : ""}</div>
         <div class="mins">${minsHtml}</div>
       </li>`;

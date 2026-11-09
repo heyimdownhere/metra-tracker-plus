@@ -125,6 +125,11 @@ button { font: inherit; color: inherit; }
 .home-btn.is-home { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 50%, var(--border)); }
 .home-btn.go-home { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); border-color: var(--accent); }
 .dep .final { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.dep .hist { font-size: 11px; color: var(--muted); margin-top: 3px; }
+.dep .hist .part { white-space: nowrap; }
+.dep .hist .good { color: var(--live); font-weight: 700; }
+.dep .hist .ok { color: var(--minor); font-weight: 700; }
+.dep .hist .bad { color: var(--late); font-weight: 700; }
 .dep .final b { color: var(--text); font-weight: 600; }
 .dep s.was { color: var(--muted); text-decoration: line-through; margin-right: 1px; }
 .home-tag { font-size: 11px; font-weight: 700; color: var(--accent); margin-left: 6px; vertical-align: middle; }

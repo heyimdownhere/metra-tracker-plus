@@ -82,6 +82,27 @@ ON CONFLICT (alert_id, header) DO UPDATE SET
 ON_TIME_SECONDS = 6 * 60
 
 
+def day_type(service_date: str | None) -> str:
+    """'weekday', 'saturday' or 'sunday' for a YYYY-MM-DD service date."""
+    from datetime import date
+    try:
+        wd = date.fromisoformat(service_date or "").weekday()
+    except ValueError:
+        return "weekday"
+    return "saturday" if wd == 5 else "sunday" if wd == 6 else "weekday"
+
+
+def _summarize(g: dict) -> dict:
+    ran = g["n"] - g["cancelled"]
+    return {
+        "observations": g["n"],
+        "on_time_pct": round(100 * g["on_time"] / ran, 1) if ran else None,
+        "avg_delay_min": round(g["delay_sum"] / ran / 60, 1) if ran else None,
+        "worst_delay_min": round(g["worst"] / 60, 1),
+        "cancelled": g["cancelled"],
+    }
+
+
 class History:
     def __init__(self, path: Path, retention_days: int):
         self.path = path
@@ -89,6 +110,7 @@ class History:
         self._lock = threading.Lock()
         self._db: sqlite3.Connection | None = None
         self._stats_cache: tuple[float, dict] | None = None
+        self._dep_cache: dict[tuple, tuple[float, dict]] = {}
 
     @property
     def enabled(self) -> bool:
@@ -167,18 +189,22 @@ class History:
         with self._lock:
             return [dict(r) for r in self._db.execute(sql, params).fetchall()]
 
-    def station_reliability(self, stop_ids: list[str], days: int, tz_offset_fn) -> list[dict]:
-        """On-time stats grouped by line, scheduled time of day and destination."""
+    def _grouped_stats(self, stop_ids: list[str], days: int, hhmm_fn) -> dict[tuple, dict]:
+        """On-time stats per (route, scheduled HH:MM, destination, day type).
+
+        Day type ("weekday", "saturday", "sunday") comes from the service date,
+        because the same clock time is often a different train on weekends.
+        """
         since = int(time.time()) - days * 86400
         marks = ",".join("?" * len(stop_ids))
         rows = self._query(
-            f"""SELECT route_id, headsign, scheduled, delay, cancelled
+            f"""SELECT service_date, route_id, headsign, scheduled, delay, cancelled
                 FROM stop_observations WHERE stop_id IN ({marks}) AND scheduled >= ?""",
             (*stop_ids, since),
         )
         groups: dict[tuple, dict] = {}
         for r in rows:
-            key = (r["route_id"], tz_offset_fn(r["scheduled"]), r["headsign"])
+            key = (r["route_id"], hhmm_fn(r["scheduled"]), r["headsign"], day_type(r["service_date"]))
             g = groups.setdefault(key, {"n": 0, "on_time": 0, "cancelled": 0, "delay_sum": 0, "worst": 0})
             g["n"] += 1
             if r["cancelled"]:
@@ -189,21 +215,26 @@ class History:
             g["worst"] = max(g["worst"], d)
             if d < ON_TIME_SECONDS:
                 g["on_time"] += 1
-        out = []
-        for (route, hhmm, headsign), g in groups.items():
-            ran = g["n"] - g["cancelled"]
-            out.append({
-                "route_id": route,
-                "scheduled_time": hhmm,
-                "destination": headsign,
-                "observations": g["n"],
-                "on_time_pct": round(100 * g["on_time"] / ran, 1) if ran else None,
-                "avg_delay_min": round(g["delay_sum"] / ran / 60, 1) if ran else None,
-                "worst_delay_min": round(g["worst"] / 60, 1),
-                "cancelled": g["cancelled"],
-            })
-        out.sort(key=lambda x: (x["scheduled_time"], x["route_id"] or ""))
+        return {key: _summarize(g) for key, g in groups.items()}
+
+    def station_reliability(self, stop_ids: list[str], days: int, hhmm_fn) -> list[dict]:
+        """On-time stats for every scheduled departure seen at a station."""
+        out = [
+            {"route_id": route, "scheduled_time": hhmm, "destination": headsign, "day_type": dt, **stats}
+            for (route, hhmm, headsign, dt), stats in self._grouped_stats(stop_ids, days, hhmm_fn).items()
+        ]
+        out.sort(key=lambda x: (x["day_type"], x["scheduled_time"], x["route_id"] or ""))
         return out
+
+    def departure_stats(self, stop_ids: list[str], days: int, hhmm_fn, max_age: float = 900) -> dict[tuple, dict]:
+        """Like station_reliability, keyed for lookup from the departure board. Cached."""
+        key = (tuple(sorted(stop_ids)), days)
+        cached = self._dep_cache.get(key)
+        if cached and time.monotonic() - cached[0] < max_age:
+            return cached[1]
+        result = self._grouped_stats(stop_ids, days, hhmm_fn)
+        self._dep_cache[key] = (time.monotonic(), result)
+        return result
 
     def alerts(self, days: int) -> list[dict]:
         since = int(time.time()) - days * 86400

@@ -56,7 +56,14 @@ All implemented, tested (34 tests) and checked on live Metra data:
 
 Still to check: the **Tracking** estimate itself hasn't been seen on a real in-service train yet, because every in-service train had a Metra prediction during testing. Watch for the "Tracking" badge and compare it with reality.
 
-## 5. Ideas
+## 5. Next features (picked 2026-11-09)
+
+- [ ] **"Leave now" alerts.** Set how long it takes to get to your station; get told when to leave, adjusted for live delays ("Leave by 7:04 for the 7:12, running 3 min late"). Deliver via Home Assistant (`notify.mobile_app_…`) or ntfy.
+- [ ] **Switch direction by time of day.** Mornings: home station toward downtown. Evenings: work station back home. Needs a saved "work" station next to home, and a cut-over time (e.g. noon).
+- [ ] **Alerts for your own stations.** Feature station-level alerts (elevator outages, entrance closures) for your home/work stations, and notify when one affects your train.
+- [ ] **Remote access with Tailscale.** Install the Tailscale plugin on Unraid so your phone reaches the server from anywhere, privately. Don't port-forward 8080: the app has no login.
+
+## 6. Ideas
 
 - [ ] **Wall-display mode** (`/?kiosk`): only the home board in large type, for a tablet by the door.
 - [ ] **History UI:** "on time 85% (30 days)" next to each departure, or a small charts page.
@@ -64,6 +71,8 @@ Still to check: the **Tracking** estimate itself hasn't been seen on a real in-s
 - [ ] Remote access away from home (e.g. a VPN to the server). Not set up; there's no login, so don't expose port 8080 to the internet.
 
 ## Done
+
+- **On-time history on the board** (2026-11-09): each departure shows e.g. "90% on time · avg 3 min late · 21 days", from the last 30 days of this train at this station on the same kind of day (weekday/Saturday/Sunday). It only appears once a train has been seen on 5+ days, so it starts showing about a week after deploying with the API key. Also in `/api/next` and `/api/commute` as `history`.
 
 - CI fixed and green (2026-11-09): tests couldn't import the app under plain `pytest` (fixed with `pytest.ini`). The two workflows were merged into `ci.yml`: tests on every push, and the image is built and published to GHCR from `main`. The first runs also hit a GitHub-side "Internal server error" before any job started; that wasn't our code.
 

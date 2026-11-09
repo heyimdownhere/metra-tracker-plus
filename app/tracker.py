@@ -16,7 +16,7 @@ import httpx
 
 from . import realtime as rtp
 from .config import Settings
-from .history import History
+from .history import History, day_type
 from .static_gtfs import (
     _dist_m,
     S_DEP, S_SEQ, S_STOP, S_ARR,
@@ -30,6 +30,11 @@ USER_AGENT = "metra-tracker-plus/1.0 (self-hosted)"
 
 # A vehicle position older than this is dropped from the map (it stopped reporting).
 STALE_VEHICLE_SECONDS = 180
+# On-time history shown on the board: look back this many days, and only show
+# stats once a departure has been seen on at least this many days.
+BOARD_HISTORY_DAYS = 30
+BOARD_HISTORY_MIN_OBS = 5
+
 # How far back to look for departures, so very late trains still show.
 DEPARTURE_LOOKBACK_SECONDS = 4 * 3600
 # GPS delay estimates are only made when the train is this close to its route.
@@ -736,10 +741,12 @@ class Tracker:
         candidates.sort(key=lambda c: c[0])
 
         rows = []
+        stats = self._board_history(stop_ids)
         for effective, trip_id, stop_id, base, sched, pred, arrival in candidates[:limit]:
             row = self._row(trip_id, stop_id, sched, effective, pred, base)
             if arrival is not None:
                 row["arrival_scheduled"], row["arrival"] = arrival
+            row["history"] = self._history_for(stats, row, base)
             rows.append(row)
         if dest is None:
             rows.extend(
@@ -757,6 +764,31 @@ class Tracker:
             "generated_at": now,
             "realtime": self.realtime_live,
         }
+
+    # ---- on-time history for the board -------------------------------------
+    def _board_history(self, stop_ids: list[str]) -> dict:
+        if not self.history.available:
+            return {}
+        tz = self.static.tz
+        try:
+            return self.history.departure_stats(
+                stop_ids, BOARD_HISTORY_DAYS, lambda ts: datetime.fromtimestamp(ts, tz).strftime("%H:%M")
+            )
+        except Exception:
+            log.exception("Reading departure history failed")
+            return {}
+
+    def _history_for(self, stats: dict, row: dict, base: float) -> dict | None:
+        """This train's record at this station on the same kind of day, if seen enough."""
+        if not stats or not row.get("scheduled"):
+            return None
+        tz = self.static.tz
+        hhmm = datetime.fromtimestamp(row["scheduled"], tz).strftime("%H:%M")
+        service_date = self.static.local_date(base + 12 * 3600).isoformat()
+        h = stats.get((row["route_id"], hhmm, row["destination"], day_type(service_date)))
+        if not h or h["observations"] < BOARD_HISTORY_MIN_OBS:
+            return None
+        return {**h, "days": BOARD_HISTORY_DAYS}
 
     # ---- simple JSON for Home Assistant / scripts ------------------------
     def _iso(self, t: float | None) -> str | None:
@@ -783,6 +815,7 @@ class Tracker:
             "final_arrival_scheduled": self._iso(r.get("final_arrival_scheduled")),
             "tracking": r.get("tracking", False),
             "delay_reason": r["delay_reason"],
+            "history": r.get("history"),
         }
         if "arrival" in r:
             out["arrival"] = self._iso(r["arrival"])

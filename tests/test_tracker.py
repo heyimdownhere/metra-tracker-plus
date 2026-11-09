@@ -563,3 +563,62 @@ def test_long_finished_trip_hidden_even_when_off_the_line(tracker):
 def test_train_arriving_at_terminal_shows_it_as_next_stop(tracker):
     at = datetime(2026, 11, 9, 8, 41, tzinfo=TZ).timestamp()  # t-0800 due at Central 8:40
     assert tracker._next_stop_delay("t-0800", at) == (None, "Central")
+
+
+# ---- on-time history on the board ---------------------------------------------
+
+def _seed_history(tracker, tmp_path, days, delays, trip="t-0800", stop="A", hhmm=(8, 0), headsign="Central", route="L1"):
+    from datetime import timedelta
+    from app.history import History
+
+    h = tracker.history if tracker.history.available else History(tmp_path / "h.db", 365)
+    if not h.available:
+        h.open()
+    tracker.history = h
+    rows = []
+    for d, delay in zip(days, delays):
+        sched = datetime(d.year, d.month, d.day, *hhmm, tzinfo=TZ).timestamp()
+        cancelled = delay == "X"
+        rows.append((d.isoformat(), trip, stop, route, headsign, 1, int(sched),
+                     None if cancelled else int(sched + delay), None if cancelled else delay, cancelled, None))
+    h.record_observations(rows)
+    h._dep_cache.clear()
+    return h
+
+
+def test_board_shows_on_time_history(tracker, tmp_path):
+    from datetime import timedelta
+    # Six previous weekdays (Mon Nov 2 - Fri Nov 6 2026 + Fri Oct 30), real timestamps "now" so the 30-day window covers them.
+    days = [date(2026, 11, d) for d in (2, 3, 4, 5, 6)] + [date(2026, 10, 30)]
+    _seed_history(tracker, tmp_path, days, [0, 120, 600, 60, 900, "X"])
+    import app.history as hist
+    real = hist.time.time
+    hist.time.time = lambda: NOW  # window relative to the fixture's "now"
+    try:
+        tracker.settings = tracker.settings.__class__(**{**tracker.settings.__dict__, "api_token": None})
+        rows = {r["trip_id"]: r for r in tracker.departures("A", limit=3, now=NOW)["departures"]}
+    finally:
+        hist.time.time = real
+    h = rows["t-0800"]["history"]
+    # 5 ran (0, 2, 10, 1, 15 min late), 1 cancelled; on time (< 6 min) = 3 of 5.
+    assert h["observations"] == 6 and h["cancelled"] == 1
+    assert h["on_time_pct"] == 60.0 and h["avg_delay_min"] == 5.6 and h["worst_delay_min"] == 15.0
+    assert rows["t-0830"]["history"] is None  # never seen
+
+
+def test_board_history_needs_enough_days_and_matching_day_type(tracker, tmp_path):
+    days = [date(2026, 11, 2), date(2026, 11, 3), date(2026, 11, 4)]  # only 3 weekdays
+    _seed_history(tracker, tmp_path, days, [0, 0, 0])
+    # 5 Saturdays at the same time don't count for a weekday train.
+    _seed_history(tracker, tmp_path, [date(2026, 10, d) for d in (3, 10, 17, 24, 31)], [0] * 5)
+    import app.history as hist
+    real = hist.time.time
+    hist.time.time = lambda: NOW
+    try:
+        tracker.settings = tracker.settings.__class__(**{**tracker.settings.__dict__, "api_token": None})
+        rows = {r["trip_id"]: r for r in tracker.departures("A", limit=3, now=NOW)["departures"]}
+        stats = tracker.history.station_reliability(["A"], 365, lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%H:%M"))
+    finally:
+        hist.time.time = real
+    assert rows["t-0800"]["history"] is None
+    assert {(x["day_type"], x["observations"]) for x in stats} == {("weekday", 3), ("saturday", 5)}
