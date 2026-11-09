@@ -5,7 +5,7 @@ Updated 2026-11-09. The app runs against Metra's **real** schedule and **live** 
 ## 1. Deploy on the server (SERVER-IP): do first
 
 - [ ] Clone to `/mnt/user/appdata/metra-tracker-plus-src`.
-- [ ] `docker build -t metra-tracker-plus:latest .` The image has never been built: the dev sandbox had no Docker. The app has only run from a clean pip install.
+- [ ] Build: `docker build -t metra-tracker-plus:latest .`, **or** skip building and set the template's Repository to `ghcr.io/heyimdownhere/metra-tracker-plus:latest`. The Dockerfile now builds successfully on GitHub, and CI publishes that image on every push to `main`. If the server can't pull it, check the package is public: GitHub → profile → Packages → metra-tracker-plus → Package settings.
 - [ ] Copy `unraid/metra-tracker-plus.xml` to `/boot/config/plugins/dockerMan/templates-user/`, then add the container from the template.
 - [ ] Put the API key in `METRA_API_TOKEN` (masked field). The status pill should show **Live**.
 - [ ] Open `http://SERVER-IP:8080`. Check the WebUI button and that Docker health shows **healthy**.
@@ -20,7 +20,6 @@ Map tiles were blocked in the dev sandbox, so these have never been seen drawing
 - [ ] 3D buildings (OpenFreeMap) in the Loop, in dark and light mode, and phone performance with them on.
 - [ ] Estimated train positions (schedule-only mode) sit on the lines, especially the ME and RI branches.
 - [ ] Refresh the README screenshots once the map tiles show (current ones have a blank map background).
-- [ ] Check the first GitHub Actions run (Actions tab) and, if you want to pull instead of build, the published `ghcr.io` image.
 
 Over the first days of real use:
 
@@ -65,6 +64,8 @@ Still to check: the **Tracking** estimate itself hasn't been seen on a real in-s
 - [ ] Remote access away from home (e.g. a VPN to the server). Not set up; there's no login, so don't expose port 8080 to the internet.
 
 ## Done
+
+- CI fixed and green (2026-11-09): tests couldn't import the app under plain `pytest` (fixed with `pytest.ini`). The two workflows were merged into `ci.yml`: tests on every push, and the image is built and published to GHCR from `main`. The first runs also hit a GitHub-side "Internal server error" before any job started; that wasn't our code.
 
 - Live Metra feeds verified: Bearer token works; trip IDs match the schedule; `vehicle.label` is the train number; ~146 untripped yard vehicles hidden; line-wide alerts filtered so only delay-related ones explain delays. Metra doesn't send track numbers, and its feed often returns 500/504 errors; the app keeps the last good data and retries.
 - Line-name search ("upn"), optional **Going to** with arrival times, swap button.
