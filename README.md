@@ -4,7 +4,25 @@ Better Metra tracker for phone and data usage.
 
 A self-hosted web app that shows live Metra trains, built to run on an Unraid server. Open `http://SERVER-IP:8080` from any device on your network.
 
-![Desktop, dark mode](docs/screenshot-desktop-dark-settings.png)
+## What it does
+
+Metra Tracker+ runs on your home server and answers the questions you have on the way to the train:
+
+- **When is my next train, and is it on time?** Pick your station once. The board then shows the next five departures, how many minutes away each is, and whether it's on time, late, or cancelled. When a train is late it shows why (for example "Weather" or "Freight interference"), if Metra has posted an alert about it.
+- **Where are the trains right now?** A map of the whole Metra system shows every line in its official color and every train moving along it. Tap a train to see where it's going, its next stop, and how late it is. The map can switch between dark, light, street and satellite views, show 3D buildings downtown, and overlay all the railway tracks.
+- **Is anything wrong on my line?** Service alerts appear in a banner at the top. Alerts for your line are listed first.
+- **Can my phone just tell me?** Home Assistant can ask the app for your commute (say, Naperville → Union Station) and send a weekday-morning notification like *"7:12 AM (on time), 7:30 AM (8 min late: Weather)"*.
+- **How reliable is my train, really?** The app keeps a year of delay and cancellation history, so you can see how often your usual train is on time and export the data.
+
+It's light on your phone's data: your home server talks to Metra, and your phone only downloads a small summary from it. It works before you have a Metra API key, using the published schedule and estimated train positions. Add the key and everything switches to live data.
+
+| Desktop | Phone |
+|---|---|
+| ![Desktop, dark mode](docs/screenshot-desktop-dark-settings.png) | ![Phone, dark mode](docs/screenshot-mobile-dark.png) |
+
+*Screenshots use simulated live data. The real app shows a street map under the lines.*
+
+**Status:** the app runs against Metra's real schedule. Live data, the Docker build on the server, and the Home Assistant setup still need to be verified; see [TODO.md](TODO.md).
 
 ## Features
 
