@@ -66,9 +66,8 @@ Still to check: the **Tracking** estimate itself hasn't been seen on a real in-s
 ## 6. Ideas
 
 - [ ] **Wall-display mode** (`/?kiosk`): only the home board in large type, for a tablet by the door.
-- [ ] **History UI:** "on time 85% (30 days)" next to each departure, or a small charts page.
+- [ ] A small history page with charts (per-train on-time trend, worst days).
 - [ ] Store train positions in history too (currently predictions, cancellations and alerts only).
-- [ ] Remote access away from home (e.g. a VPN to the server). Not set up; there's no login, so don't expose port 8080 to the internet.
 
 ## Done
 
