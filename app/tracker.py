@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import re
 import time
 from bisect import bisect_left
 from dataclasses import dataclass
@@ -24,6 +25,25 @@ from .static_gtfs import (
 log = logging.getLogger(__name__)
 
 USER_AGENT = "metra-tracker-plus/1.0 (self-hosted)"
+
+DELAY_EFFECTS = {"SIGNIFICANT_DELAYS", "REDUCED_SERVICE", "NO_SERVICE", "DETOUR", "MODIFIED_SERVICE"}
+NON_DELAY_EFFECTS = {"ACCESSIBILITY_ISSUE", "STOP_MOVED", "NO_EFFECT", "ADDITIONAL_SERVICE"}
+DELAY_WORDS = re.compile(
+    r"\b(delay(s|ed)?|late|behind schedule|standing|stopped|holding|held|congestion|"
+    r"mechanical|signal (problem|issue)s?|police|pedestrian|trespasser|freight|weather)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_delay_alert(a: rtp.AlertInfo) -> bool:
+    """Whether a line-wide alert plausibly explains a late train."""
+    if a.effect in DELAY_EFFECTS:
+        return True
+    if a.effect in NON_DELAY_EFFECTS:
+        return False
+    if a.cause not in ("UNKNOWN_CAUSE", "OTHER_CAUSE", "", None):
+        return True
+    return bool(DELAY_WORDS.search(f"{a.header} {a.description}"))
 
 
 @dataclass
@@ -273,9 +293,14 @@ class Tracker:
         """
         candidates = [a for a in self._alerts_by_trip.get(trip_id or "", []) if a.active(now)]
         if not candidates:
-            candidates = [a for a in self._alerts_by_route.get(route_id or "", []) if a.active(now)]
-            # Prefer alerts that are actually about delays.
-            candidates.sort(key=lambda a: a.effect not in ("SIGNIFICANT_DELAYS", "REDUCED_SERVICE"))
+            # Most of Metra's line-wide alerts are standing notices (elevators,
+            # station construction, weekend closures) that say nothing about
+            # why a particular train is late, so only use delay-related ones.
+            candidates = [
+                a for a in self._alerts_by_route.get(route_id or "", [])
+                if a.active(now) and _is_delay_alert(a)
+            ]
+            candidates.sort(key=lambda a: a.effect not in DELAY_EFFECTS)
         for a in candidates:
             if a.cause and a.cause not in ("UNKNOWN_CAUSE", "OTHER_CAUSE"):
                 return a.cause.replace("_", " ").capitalize()
@@ -424,21 +449,44 @@ class Tracker:
                         continue
                     yield trip_id, stop_id, seq, base, sched, effective, pred
 
-    def departures(self, station_id: str, limit: int = 5, now: float | None = None) -> dict:
+    def departures(
+        self, station_id: str, limit: int = 5, now: float | None = None, to: str | None = None
+    ) -> dict:
+        """Next departures from a station; with `to`, only trains that later stop there."""
         s = self.static
         if not s:
             return {"station": None, "departures": []}
         now = time.time() if now is None else now
         stop_ids = self._station_stops(station_id)
-        rows = [
-            self._row(trip_id, stop_id, sched, effective, pred)
-            for trip_id, stop_id, _seq, _base, sched, effective, pred in self._iter_departures(stop_ids, now)
-        ]
-        rows.extend(self._added_departures(set(stop_ids), now))
+        dest = None
+        if to:
+            dest = set(s.station_children.get(to) or ([to] if to in s.stops else []))
+            if not dest:
+                raise KeyError(to)
+        rows = []
+        for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(stop_ids, now):
+            row = self._row(trip_id, stop_id, sched, effective, pred)
+            if dest is not None:
+                arrival = next((x for x in s.trip_stops[trip_id] if x[S_SEQ] > seq and x[S_STOP] in dest), None)
+                if arrival is None:
+                    continue
+                arr_pred = self._predict(trip_id, arrival[S_SEQ], base) if pred else None
+                if arr_pred and arr_pred["skipped"]:
+                    continue
+                row["arrival_scheduled"] = base + arrival[S_ARR]
+                row["arrival"] = (
+                    arr_pred["time"] if arr_pred and arr_pred["time"]
+                    else row["arrival_scheduled"] + (row["delay"] or 0)
+                )
+            rows.append(row)
+        if dest is None:
+            rows.extend(self._added_departures(set(stop_ids), now))
         rows.sort(key=lambda r: r["time"])
         station = s.stops.get(station_id)
+        dest_stop = s.stops.get(to) if to else None
         return {
             "station": {"id": station_id, "name": station["name"] if station else station_id},
+            "to": {"id": to, "name": dest_stop["name"] if dest_stop else to} if to else None,
             "departures": rows[:limit],
             "generated_at": now,
             "realtime": self.realtime_live,
@@ -619,7 +667,12 @@ class Tracker:
     def _live_trains(self, now: float) -> list[dict]:
         s = self.static
         out = []
+        labels = {tid: info.update.vehicle_label for tid, info in self._rt_by_trip.items()}
         for v in self.rt.vehicles:
+            # Metra also reports cars and locomotives that aren't running a
+            # trip (yards, layovers); those aren't trains a rider cares about.
+            if v.trip is None or not (v.trip.trip_id or v.trip.route_id):
+                continue
             trip_id = None
             if s and v.trip:
                 trip_id = s.resolve_trip(v.trip.trip_id, v.trip.route_id, v.trip.start_time, v.trip.start_date, v.trip.direction_id)
@@ -633,7 +686,7 @@ class Tracker:
                 next_stop = s.stop_name(v.stop_id)
             out.append({
                 "id": v.key,
-                "train": (s.trips[trip_id][T_SHORT_NAME] if trip_id else None) or v.label,
+                "train": (s.trips[trip_id][T_SHORT_NAME] if trip_id else None) or labels.get(trip_id or "") or v.label,
                 "trip_id": trip_id or (v.trip.trip_id if v.trip else None),
                 "route_id": route_id,
                 "route_name": route.get("long_name", route_id),

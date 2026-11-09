@@ -4,6 +4,7 @@
 
   const STATION_KEY = "metra.station";
   const THEME_KEY = "metra.theme";
+  const DEST_KEY = "metra.dest";
 
   const state = {
     tz: "America/Chicago",
@@ -11,6 +12,7 @@
     stations: [],
     stationById: new Map(),
     station: localStorage.getItem(STATION_KEY),
+    dest: localStorage.getItem(DEST_KEY),
     departures: null,
     status: null,
   };
@@ -83,12 +85,7 @@
     note.hidden = false;
   }
 
-  // ---------- station picker ----------
-  const input = $("station-input");
-  const list = $("station-list");
-  let matches = [];
-  let active = -1;
-
+  // ---------- station pickers ----------
   function routeChips(ids) {
     const routes = (state.status && state.status.routes) || [];
     return ids.map((id) => {
@@ -97,64 +94,126 @@
     }).join("");
   }
 
-  function renderList() {
-    const q = input.value.trim().toLowerCase();
-    matches = state.stations.filter((s) => !q || s.name.toLowerCase().includes(q) || s.id.toLowerCase().includes(q));
-    matches.sort((a, b) => {
-      const as = a.name.toLowerCase().startsWith(q) ? 0 : 1;
-      const bs = b.name.toLowerCase().startsWith(q) ? 0 : 1;
-      return as - bs || a.name.localeCompare(b.name);
+  // "upn", "UP-N" and "up n" all match the UP-N line.
+  const norm = (x) => String(x).toLowerCase().replace(/[^a-z0-9]/g, "");
+
+  function stationMatches(q) {
+    const raw = q.trim().toLowerCase();
+    const nq = norm(q);
+    if (!nq) return state.stations.slice();
+    const routes = (state.status && state.status.routes) || [];
+    const lineIds = new Set(routes
+      .filter((r) => norm(r.id) === nq || norm(r.short_name) === nq || norm(r.long_name).startsWith(nq))
+      .map((r) => r.id));
+    const scored = [];
+    for (const s of state.stations) {
+      const name = s.name.toLowerCase();
+      let score = -1;
+      if (name.startsWith(raw)) score = 0;
+      else if (name.includes(raw) || norm(s.name).includes(nq) || norm(s.id).includes(nq)) score = 1;
+      else if (s.routes.some((r) => lineIds.has(r))) score = 2;
+      if (score >= 0) scored.push([score, s]);
+    }
+    scored.sort((a, b) => a[0] - b[0] || a[1].name.localeCompare(b[1].name));
+    return scored.map((x) => x[1]);
+  }
+
+  function makePicker({ inputId, listId, getValue, onSelect, allowClear }) {
+    const input = $(inputId);
+    const list = $(listId);
+    let matches = [];
+    let active = -1;
+    const current = () => { const st = state.stationById.get(getValue()); return st ? st.name : ""; };
+
+    function open(isOpen) {
+      list.hidden = !isOpen;
+      input.setAttribute("aria-expanded", String(isOpen));
+    }
+    function render() {
+      matches = stationMatches(input.value).slice(0, 80);
+      active = matches.length ? 0 : -1;
+      const clear = allowClear && getValue() ? '<li role="option" data-id="" class="clear-opt">Any destination</li>' : "";
+      list.innerHTML = clear + (matches.length
+        ? matches.map((s, i) => `<li role="option" id="${listId}-${i}" data-id="${esc(s.id)}" aria-selected="${i === active}"><span>${esc(s.name)}</span><span class="chips">${routeChips(s.routes)}</span></li>`).join("")
+        : '<li class="empty">No matching stations</li>');
+      open(true);
+    }
+    function setActive(i) {
+      if (!matches.length) return;
+      active = (i + matches.length) % matches.length;
+      list.querySelectorAll("li[id]").forEach((li, j) => li.setAttribute("aria-selected", String(j === active)));
+      const el = $(`${listId}-${active}`);
+      if (el) el.scrollIntoView({ block: "nearest" });
+      input.setAttribute("aria-activedescendant", `${listId}-${active}`);
+    }
+    function choose(id) {
+      open(false);
+      input.blur();
+      onSelect(id);
+      input.value = current();
+    }
+
+    input.addEventListener("focus", () => { input.select(); render(); });
+    input.addEventListener("input", render);
+    input.addEventListener("search", () => { if (allowClear && !input.value) choose(""); });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") { e.preventDefault(); if (list.hidden) render(); else setActive(active + 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); setActive(active - 1); }
+      else if (e.key === "Enter") {
+        e.preventDefault();
+        if (allowClear && !input.value.trim()) choose("");
+        else if (matches[active]) choose(matches[active].id);
+      }
+      else if (e.key === "Escape") { open(false); input.value = current(); input.blur(); }
     });
-    matches = matches.slice(0, 60);
-    active = matches.length ? 0 : -1;
-    list.innerHTML = matches.length
-      ? matches.map((s, i) => `<li role="option" id="opt-${i}" data-id="${esc(s.id)}" aria-selected="${i === active}"><span>${esc(s.name)}</span><span class="chips">${routeChips(s.routes)}</span></li>`).join("")
-      : '<li class="empty">No matching stations</li>';
-    openList(true);
-  }
-  function openList(open) {
-    list.hidden = !open;
-    input.setAttribute("aria-expanded", String(open));
-  }
-  function setActive(i) {
-    if (!matches.length) return;
-    active = (i + matches.length) % matches.length;
-    list.querySelectorAll("li[role=option]").forEach((li, j) => li.setAttribute("aria-selected", String(j === active)));
-    const el = $(`opt-${active}`);
-    if (el) el.scrollIntoView({ block: "nearest" });
-    input.setAttribute("aria-activedescendant", `opt-${active}`);
+    list.addEventListener("mousedown", (e) => {
+      const li = e.target.closest("li[data-id]");
+      if (li) { e.preventDefault(); choose(li.dataset.id); }
+    });
+    input.addEventListener("blur", () => setTimeout(() => { open(false); input.value = current(); }, 120));
+    return { sync: () => { input.value = current(); }, open: () => input.focus() };
   }
 
-  input.addEventListener("focus", () => { input.select(); renderList(); });
-  input.addEventListener("input", renderList);
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown") { e.preventDefault(); if (list.hidden) renderList(); else setActive(active + 1); }
-    else if (e.key === "ArrowUp") { e.preventDefault(); setActive(active - 1); }
-    else if (e.key === "Enter") { e.preventDefault(); if (matches[active]) selectStation(matches[active].id); }
-    else if (e.key === "Escape") { openList(false); input.value = currentName(); input.blur(); }
+  const fromPicker = makePicker({
+    inputId: "station-input", listId: "station-list",
+    getValue: () => state.station,
+    onSelect: (id) => selectStation(id),
   });
-  list.addEventListener("mousedown", (e) => {
-    const li = e.target.closest("li[data-id]");
-    if (li) { e.preventDefault(); selectStation(li.dataset.id); }
+  const toPicker = makePicker({
+    inputId: "dest-input", listId: "dest-list", allowClear: true,
+    getValue: () => state.dest,
+    onSelect: (id) => selectDest(id),
   });
-  input.addEventListener("blur", () => setTimeout(() => { openList(false); input.value = currentName(); }, 120));
 
-  function currentName() {
-    const s = state.stationById.get(state.station);
-    return s ? s.name : "";
-  }
+  $("swap-btn").addEventListener("click", () => {
+    if (!state.station || !state.dest) return;
+    const from = state.station;
+    state.station = state.dest;
+    state.dest = from;
+    localStorage.setItem(STATION_KEY, state.station);
+    localStorage.setItem(DEST_KEY, state.dest);
+    fromPicker.sync();
+    toPicker.sync();
+    refreshDepartures();
+  });
 
   function selectStation(id, opts = {}) {
     const st = state.stationById.get(id);
     if (!st) return;
     state.station = id;
     localStorage.setItem(STATION_KEY, id);
-    input.value = st.name;
-    openList(false);
-    input.blur();
+    if (state.dest === id) selectDest("", { refresh: false });
+    fromPicker.sync();
     $("board-title").textContent = st.name;
     if (opts.pan !== false) mapView.flyTo(st.lat, st.lon);
     refreshDepartures();
+  }
+
+  function selectDest(id, opts = {}) {
+    state.dest = id && state.stationById.has(id) ? id : null;
+    if (state.dest) localStorage.setItem(DEST_KEY, state.dest); else localStorage.removeItem(DEST_KEY);
+    toPicker.sync();
+    if (opts.refresh !== false) refreshDepartures();
   }
 
   // ---------- departure board ----------
@@ -166,7 +225,8 @@
       return;
     }
     try {
-      state.departures = await api(`/api/departures?station=${encodeURIComponent(state.station)}&limit=5`);
+      const to = state.dest ? `&to=${encodeURIComponent(state.dest)}` : "";
+      state.departures = await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}&limit=5`);
     } catch (e) {
       console.warn(e);
       showEmpty("Couldn't load departures. Retrying…");
@@ -185,11 +245,14 @@
     const d = state.departures;
     if (!d) return;
     const now = Date.now() / 1000;
-    $("board-title").textContent = d.station ? d.station.name : "";
+    const from = d.station ? d.station.name : "";
+    $("board-title").textContent = d.to ? `${from} → ${d.to.name}` : from;
     $("board-updated").textContent = `Updated ${fmtTime(d.generated_at)}`;
     if (!d.departures.length) {
       $("board-list").innerHTML = "";
-      showEmpty("No upcoming departures found in the schedule.");
+      showEmpty(d.to
+        ? `No upcoming trains from ${from} to ${d.to.name}. They may be on different lines; try "Any destination".`
+        : "No upcoming departures found in the schedule.");
       return;
     }
     showEmpty("");
@@ -211,6 +274,7 @@
         <div class="timecol"><div class="time">${fmtTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
         <div class="main"><div class="dest" title="${esc(r.destination)}">${esc(r.destination || r.route_name)}</div>
         <div class="meta">${meta}</div>
+        ${r.arrival ? `<div class="arrive">Arrives <b>${fmtTime(r.arrival)}</b> · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
         ${r.delay_reason ? `<div class="reason" title="${esc(r.delay_reason)}">${esc(r.delay_reason)}</div>` : ""}</div>
         <div class="mins">${minsHtml}</div>
       </li>`;
@@ -284,6 +348,8 @@
     state.stations = stations;
     state.stationById = new Map(stations.map((s) => [s.id, s]));
     mapView.setStations(stations);
+    if (state.dest && !state.stationById.has(state.dest)) state.dest = null;
+    toPicker.sync();
     if (state.station && state.stationById.has(state.station)) selectStation(state.station, { pan: false });
     else { state.station = null; refreshDepartures(); }
     refreshTrains();

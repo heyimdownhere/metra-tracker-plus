@@ -73,13 +73,17 @@ def stations():
 
 
 @app.get("/api/departures")
-def departures(station: str = Query(..., min_length=1), limit: int = Query(5, ge=1, le=20)):
+def departures(
+    station: str = Query(..., min_length=1),
+    limit: int = Query(5, ge=1, le=20),
+    to: str | None = Query(None, description="Only trains that later stop at this station"),
+):
     if tracker.static is None:
         raise HTTPException(503, "Schedule not loaded yet")
     try:
-        return _json(tracker.departures(station, limit))
-    except KeyError:
-        raise HTTPException(404, f"Unknown station {station!r}")
+        return _json(tracker.departures(station, limit, to=to or None))
+    except KeyError as exc:
+        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
 
 
 @app.get("/api/trains")

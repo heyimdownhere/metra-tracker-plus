@@ -109,7 +109,20 @@ button { font: inherit; color: inherit; }
 }
 
 /* ---- station picker ---- */
-.picker { padding: 14px 16px 6px; }
+.picker { padding: 14px 16px 6px; display: grid; grid-template-columns: 1fr; gap: 6px; position: relative; }
+.picker-field { min-width: 0; }
+.picker .optional { text-transform: none; letter-spacing: 0; opacity: .8; }
+.swap-btn {
+  position: absolute; right: 22px; top: 70px; z-index: 2; width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--panel); cursor: pointer; display: grid; place-items: center;
+}
+.swap-btn svg { width: 16px; height: 16px; fill: var(--muted); transform: rotate(90deg); }
+.swap-btn:hover svg { fill: var(--text); }
+#dest-input { width: 100%; padding: 11px 14px; font-size: 16px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; outline: none; }
+#dest-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.dep .arrive { font-size: 12px; color: var(--muted); }
+.dep .arrive b { color: var(--text); font-weight: 600; }
 .picker-label { display: block; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin-bottom: 6px; }
 .picker-box { position: relative; }
 #station-input {
@@ -125,6 +138,7 @@ button { font: inherit; color: inherit; }
 .station-list li { padding: 9px 10px; border-radius: 7px; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .station-list li[aria-selected="true"], .station-list li:hover { background: var(--panel-2); }
 .station-list .chips { display: flex; gap: 3px; flex-wrap: wrap; justify-content: flex-end; }
+.station-list .clear-opt { color: var(--accent); font-weight: 600; }
 .station-list .empty { color: var(--muted); cursor: default; }
 
 /* ---- board ---- */

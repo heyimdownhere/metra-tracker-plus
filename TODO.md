@@ -4,8 +4,9 @@ Status as of 2026-11-09. The app runs and has been tested against Metra's real *
 
 ## 1. Do first (blockers)
 
-- [ ] **Create the GitHub repo** `heyimdownhere/metra-tracker-plus` (empty, no README) and push this code. Until then the code only exists in a temporary cloud session.
-- [ ] **Get the Metra API token** and put it in `METRA_API_TOKEN` (Unraid: edit the container; the field is masked).
+- [x] Create the GitHub repo and push.
+- [x] Get the Metra API token. It works and was tested against the live feeds on 2026-11-09.
+- [ ] Put the token in `METRA_API_TOKEN` on the server (Unraid: edit the container; the field is masked).
 
 ## 2. Deploy on the server (SERVER-IP)
 
@@ -15,17 +16,21 @@ Status as of 2026-11-09. The app runs and has been tested against Metra's real *
 - [ ] Open `http://SERVER-IP:8080`. Check that the WebUI button works and the Docker health status turns **healthy**.
 - [ ] Check that `/mnt/user/appdata/metra-tracker/gtfs/` gets created and that a restart is fast (it loads `static.pkl`).
 
-## 3. Verify with real realtime data (needs the token)
+## 3. Realtime: findings from the first live test (2026-11-09)
 
-Realtime has only been tested with fake feeds built from real trip IDs.
+Done:
+- [x] The `Authorization: Bearer` token works on all three feeds.
+- [x] **Trip IDs match the schedule exactly** (32/32 trip updates, 45/45 positioned trains), so no ID-format fallback is needed yet.
+- [x] **Train numbers:** `vehicle.label` is the train number (e.g. UP-N #326), now shown on the board and map.
+- [x] Of 191 vehicle positions, ~146 have no trip (cars and locomotives in yards or layovers). These are now hidden from the map.
+- [x] **Alerts:** almost all line-wide alerts are standing notices (elevators, construction, weekend closures) with `UNKNOWN_CAUSE`. The line-level fallback for delay reasons now only uses delay-related alerts. Trip-level alerts do exist (e.g. "BNSF Inbound Trains On the Move Delayed" naming one train) and are used as-is.
 
-- [ ] Status pill shows **Live**. `/api/status` shows all three feeds with `entities > 0` and no `error`.
-- [ ] Confirm the token goes in an `Authorization: Bearer` header. If Metra rejects it, check their docs; the header format is in `app/tracker.py` → `_fetch_feed`.
-- [ ] **Trip matching:** do realtime `trip_id`s match the schedule's? If departures stay "Scheduled" while trains move on the map, the ID format has changed. The fallback matches on route + start time; check that it works.
-- [ ] **Train numbers:** is `vehicle.label` the train number (e.g. 1234)? It's shown as "#1234" on the board and map.
-- [ ] **Track numbers:** does Metra send them? The app reads `stop_time_properties.assigned_stop_id` → `platform_code`. If Metra puts track elsewhere, adapt `_track()` in `app/tracker.py`.
-- [ ] **Delay reasons:** look at real alerts. Do they name trips or only routes, and are the causes set or mostly `UNKNOWN_CAUSE`? Decide whether skipping `OTHER_CAUSE` (showing the alert text instead) is right.
-- [ ] Watch a delayed train: is the delay carried correctly to later stops? Compare against Metra's own app.
+Still open:
+- [ ] **Track numbers:** Metra doesn't send them (no `stop_time_properties`), so tracks never show. Consider removing the track UI, or find another source.
+- [ ] **Metra's feed is flaky:** frequent HTTP 500/504 and one corrupt response during testing. The app keeps the last good data and retries every 30 s. Consider showing "realtime data N min old" when it's stale.
+- [ ] Trip updates only cover about 32 of 45 running trains and contain only arrival times. Trains without a trip update show "Scheduled" on the board even though they're on the map. Consider showing them as "Tracking" with no delay.
+- [ ] Some live trains show no next stop, when the schedule says the trip should already have ended (very late train, no trip update). Could use the nearest stop ahead from the GPS position instead.
+- [ ] Watch a delayed train and compare its predictions against Metra's own app.
 - [ ] Check `/api/history/station?station=…` after a day or two of data.
 
 ## 4. Map: check in a real browser
@@ -48,6 +53,9 @@ Map tiles were blocked in the dev sandbox, so none of these have been seen actua
 - [ ] Test: run the automation manually and confirm the phone gets the message.
 
 ## 6. Nice to have / known gaps
+
+- [x] Search by line name ("upn" lists all UP-N stations) and an optional **Going to** destination, with arrival times and trip length (done 2026-11-09).
+- [ ] The swap (⇅) button overlaps the From field's clear (×) button while typing. Move it.
 
 - [ ] **History UI:** history is API-only right now. Ideas: an "on time 85% (30 days)" note on each departure, or a small history page with charts.
 - [ ] Decide whether to also store train *positions* in history. Today only predictions, cancellations and alerts are stored.

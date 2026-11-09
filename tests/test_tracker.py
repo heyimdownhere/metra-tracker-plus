@@ -241,3 +241,45 @@ def test_history_records_and_summarises(tracker, tmp_path):
     assert by_time["08:00"]["on_time_pct"] == 100.0 and by_time["08:30"]["cancelled"] == 1
     assert h.alerts(3650)[0]["header"] == "Strike"
     assert h.stats()["observations"] == len(obs)
+
+
+def test_route_fallback_ignores_standing_notices(tracker):
+    elevator = _alert("e", None, "Alpha elevator out of service", route_id="L1")
+    elevator.alert.effect = pb.Alert.ACCESSIBILITY_ISSUE
+    _apply(tracker, [_tu("t-0800", [("A", 600)])], [
+        elevator,
+        _alert("c", None, "Bravo Station Construction", route_id="L1"),
+    ])
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    assert rows["t-0800"]["delay"] == 600 and rows["t-0800"]["delay_reason"] is None
+    # ...but a line-wide alert that talks about delays is used.
+    _apply(tracker, [_tu("t-0800", [("A", 600)])], [_alert("d", None, "L1 trains delayed 10-15 minutes", route_id="L1")])
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    assert rows["t-0800"]["delay_reason"] == "L1 trains delayed 10-15 minutes"
+
+
+def test_live_trains_skip_vehicles_without_trip(tracker):
+    def veh(eid, trip_id=None, label=None):
+        e = pb.FeedEntity(id=eid)
+        e.vehicle.position.latitude, e.vehicle.position.longitude = 41.9, -88.05
+        e.vehicle.vehicle.id = "car" + eid
+        if label:
+            e.vehicle.vehicle.label = label
+        if trip_id:
+            e.vehicle.trip.trip_id = trip_id
+        return e
+    tracker.rt.vehicles = rtp.parse_positions(_feed(veh("1", "t-0800", "1234"), veh("2"), veh("3")))
+    trains = tracker._live_trains(NOW)
+    assert [t["train"] for t in trains] == ["1234"] and trains[0]["route_id"] == "L1"
+
+
+def test_departures_filtered_by_destination(tracker):
+    tracker.settings = tracker.settings.__class__(**{**tracker.settings.__dict__, "api_token": None})
+    d = tracker.departures("A", limit=3, now=NOW, to="B")
+    assert d["to"]["name"] == "Bravo"
+    assert [r["trip_id"] for r in d["departures"]] == ["t-0800", "u-0815", "t-0830"]
+    first = d["departures"][0]
+    assert first["arrival"] - first["time"] == 600
+    assert tracker.departures("B", now=NOW, to="A")["departures"] == []  # wrong direction
+    with pytest.raises(KeyError):
+        tracker.departures("A", now=NOW, to="NOPE")

@@ -45,12 +45,26 @@
   <main class="layout">
     <aside class="panel">
       <div class="picker">
-        <label for="station-input" class="picker-label">Station</label>
-        <div class="picker-box">
-          <input id="station-input" type="search" autocomplete="off" spellcheck="false"
-                 placeholder="Search stations…" role="combobox" aria-expanded="false"
-                 aria-controls="station-list" aria-autocomplete="list">
-          <ul id="station-list" class="station-list" role="listbox" hidden></ul>
+        <div class="picker-field">
+          <label for="station-input" class="picker-label">From</label>
+          <div class="picker-box">
+            <input id="station-input" type="search" autocomplete="off" spellcheck="false"
+                   placeholder="Station or line (e.g. Naperville, UP-N)…" role="combobox" aria-expanded="false"
+                   aria-controls="station-list" aria-autocomplete="list">
+            <ul id="station-list" class="station-list" role="listbox" hidden></ul>
+          </div>
+        </div>
+        <button id="swap-btn" class="swap-btn" type="button" aria-label="Swap from and to" title="Swap">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3 3 7l4 4V8h11V6H7V3Zm10 10v3H6v2h11v3l4-4-4-4Z"/></svg>
+        </button>
+        <div class="picker-field">
+          <label for="dest-input" class="picker-label">Going to <span class="optional">(optional)</span></label>
+          <div class="picker-box">
+            <input id="dest-input" type="search" autocomplete="off" spellcheck="false"
+                   placeholder="Any destination" role="combobox" aria-expanded="false"
+                   aria-controls="dest-list" aria-autocomplete="list">
+            <ul id="dest-list" class="station-list" role="listbox" hidden></ul>
+          </div>
         </div>
       </div>
 
