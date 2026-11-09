@@ -283,3 +283,24 @@ def test_departures_filtered_by_destination(tracker):
     assert tracker.departures("B", now=NOW, to="A")["departures"] == []  # wrong direction
     with pytest.raises(KeyError):
         tracker.departures("A", now=NOW, to="NOPE")
+
+
+def test_final_station_eta_uses_live_delay(tracker):
+    _apply(tracker, [_tu("t-0800", [("A", 300)])])
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    live, sched = rows["t-0800"], rows["t-0830"]
+    assert live["final_stop"] == "Central"
+    assert live["final_arrival"] - live["final_arrival_scheduled"] == 300  # 8:40 + 5 min
+    assert datetime.fromtimestamp(live["final_arrival_scheduled"], TZ).strftime("%H:%M") == "08:40"
+    assert sched["final_arrival"] == sched["final_arrival_scheduled"]  # no realtime -> schedule
+
+
+def test_user_settings_roundtrip(tmp_path):
+    from app.user_settings import UserSettings
+
+    us = UserSettings(tmp_path / "cfg" / "settings.json")
+    assert us.load() == {"home_station": None, "home_dest": None}
+    us.update({"home_station": "A", "home_dest": "C", "junk": 1})
+    assert UserSettings(tmp_path / "cfg" / "settings.json").load() == {"home_station": "A", "home_dest": "C"}
+    us.update({"home_dest": None})
+    assert us.load()["home_dest"] is None

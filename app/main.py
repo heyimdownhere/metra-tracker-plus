@@ -14,12 +14,13 @@ from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_settings
 from .tracker import Tracker
+from .user_settings import UserSettings
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO").upper(),
@@ -29,6 +30,7 @@ logging.basicConfig(
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 settings = load_settings()
 tracker = Tracker(settings)
+user_settings = UserSettings(settings.config_dir / "settings.json")
 
 
 @asynccontextmanager
@@ -94,6 +96,41 @@ def trains():
 @app.get("/api/alerts")
 def alerts():
     return _json(tracker.alerts())
+
+
+@app.get("/api/settings")
+def get_settings():
+    """Settings shared by all devices, e.g. the home station."""
+    return _json(user_settings.load())
+
+
+@app.put("/api/settings")
+def put_settings(changes: dict = Body(...)):
+    s = tracker.static
+    for key in ("home_station", "home_dest"):
+        if key in changes:
+            value = changes[key] or None
+            if value is not None and (not isinstance(value, str) or (s and value not in s.stops)):
+                raise HTTPException(400, f"Unknown station for {key}: {value!r}")
+            changes[key] = value
+    try:
+        return _json(user_settings.update(changes))
+    except OSError as exc:
+        raise HTTPException(500, f"Could not save settings: {exc}")
+
+
+@app.get("/api/home")
+def home(limit: int = Query(5, ge=1, le=20)):
+    """Departure board for the saved home station (handy for wall displays and Home Assistant)."""
+    cfg = user_settings.load()
+    if not cfg["home_station"]:
+        raise HTTPException(404, "No home station set")
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    try:
+        return _json(tracker.departures(cfg["home_station"], limit, to=cfg["home_dest"]))
+    except KeyError as exc:
+        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
 
 
 @app.get("/api/commute")

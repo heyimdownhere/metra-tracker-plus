@@ -29,7 +29,9 @@ It's light on your phone's data: your home server talks to Metra, and your phone
 - **Map** (MapLibre GL): every Metra line drawn in its official color from `shapes.txt`, plus station dots and train markers that refresh every 30 s. Click a train to see its line, train number, destination, next stop, delay, and delay reason.
   - **Map settings panel** (layers button, top right): basemap (Auto/Dark/Light/Streets/Satellite/None), basemap opacity, an OpenRailwayMap railway-tracks overlay with its own opacity, **3D buildings** with opacity, line opacity and width, and on/off switches for lines, stations and trains. Your choices are saved in the browser.
   - Right-drag (or two-finger drag on a phone) to tilt and rotate.
-- **Departure board**: searchable station picker that remembers your last choice. It shows the next 5 departures with time, minutes until, destination, line, track (when Metra provides it) and a **Live** or **Scheduled** badge. Realtime predictions override the schedule and fall back to it when missing. Cancelled trains are struck through.
+- **Home station**: tap **⌂ Set as home** next to "From" (optionally with a "Going to" station). Home is saved on the server (`/config/settings.json`), so every phone, tablet and computer opens straight to it. A **Home** button brings you back after looking at other stations.
+- **Departure board**: searchable station picker (search by station or line, e.g. "upn") that remembers your last choice, plus an optional **Going to** station that shows only trains to that stop, with arrival time and trip length. Each train also shows its **estimated arrival at its final station** (e.g. "Est. at Kenosha 11:46 AM"), using live delays when Metra has them.
+- The board shows the next 5 departures with time, minutes until, destination, line, track (when Metra provides it) and a **Live** or **Scheduled** badge. Realtime predictions override the schedule and fall back to it when missing. Cancelled trains are struck through.
 - **Delay reasons**: for a late or cancelled train, the app looks for an active alert naming that trip, or else one for the train's line. It shows the alert's cause (e.g. "Weather"), or the alert's text if the cause is unknown.
 - **Service alerts** banner. Alerts for your station's lines are listed first.
 - **Long-term history** in SQLite (`/config/history.db`): every realtime prediction, cancellation and alert, kept for `HISTORY_DAYS` (default 365). You can query on-time stats per departure or export the data as CSV.
@@ -119,7 +121,9 @@ Change the station IDs, the time, and `notify.mobile_app_YOUR_PHONE`.
 | `GET /healthz` | Health check. Returns 200 once the schedule is loaded, otherwise 503. |
 | `GET /api/status` | Mode, feed health, schedule version, history stats. |
 | `GET /api/stations` | Stations with the lines that serve them. |
-| `GET /api/departures?station=ID&limit=5` | Departure board. |
+| `GET /api/departures?station=ID&limit=5[&to=ID]` | Departure board; with `to`, only trains that later stop there. Each row includes `final_stop` and `final_arrival` (estimated arrival at the end of the line). |
+| `GET /api/settings` / `PUT /api/settings` | Shared settings: `{"home_station": "EVANSTON", "home_dest": null}`. |
+| `GET /api/home?limit=5` | Departure board for the saved home station (also handy for Home Assistant or a wall display). |
 | `GET /api/trains` | Train positions (live, or estimated from the schedule). |
 | `GET /api/alerts` | Active service alerts. |
 | `GET /api/lines` | GeoJSON of every line. |

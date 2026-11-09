@@ -46,7 +46,13 @@
     <aside class="panel">
       <div class="picker">
         <div class="picker-field">
-          <label for="station-input" class="picker-label">From</label>
+          <div class="picker-label-row">
+            <label for="station-input" class="picker-label">From</label>
+            <button id="home-btn" class="home-btn" type="button" hidden>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
+              <span id="home-btn-text">Set as home</span>
+            </button>
+          </div>
           <div class="picker-box">
             <input id="station-input" type="search" autocomplete="off" spellcheck="false"
                    placeholder="Station or line (e.g. Naperville, UP-N)…" role="combobox" aria-expanded="false"
@@ -54,11 +60,13 @@
             <ul id="station-list" class="station-list" role="listbox" hidden></ul>
           </div>
         </div>
-        <button id="swap-btn" class="swap-btn" type="button" aria-label="Swap from and to" title="Swap">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3 3 7l4 4V8h11V6H7V3Zm10 10v3H6v2h11v3l4-4-4-4Z"/></svg>
-        </button>
         <div class="picker-field">
-          <label for="dest-input" class="picker-label">Going to <span class="optional">(optional)</span></label>
+          <div class="picker-label-row">
+            <label for="dest-input" class="picker-label">Going to <span class="optional">(optional)</span></label>
+            <button id="swap-btn" class="swap-btn" type="button" aria-label="Swap from and to" title="Swap">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3 3 7l4 4V8h11V6H7V3Zm10 10v3H6v2h11v3l4-4-4-4Z"/></svg>
+            </button>
+          </div>
           <div class="picker-box">
             <input id="dest-input" type="search" autocomplete="off" spellcheck="false"
                    placeholder="Any destination" role="combobox" aria-expanded="false"
@@ -71,6 +79,10 @@
       <div class="board">
         <div class="board-head">
           <h2 id="board-title">Choose a station</h2>
+          <button id="go-home-btn" class="home-btn go-home" type="button" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
+            <span>Home</span>
+          </button>
           <span id="board-updated" class="muted small"></span>
         </div>
         <ol id="board-list" class="board-list"></ol>

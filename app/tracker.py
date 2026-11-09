@@ -465,7 +465,7 @@ class Tracker:
                 raise KeyError(to)
         rows = []
         for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(stop_ids, now):
-            row = self._row(trip_id, stop_id, sched, effective, pred)
+            row = self._row(trip_id, stop_id, sched, effective, pred, base)
             if dest is not None:
                 arrival = next((x for x in s.trip_stops[trip_id] if x[S_SEQ] > seq and x[S_STOP] in dest), None)
                 if arrival is None:
@@ -505,7 +505,7 @@ class Tracker:
             arrival = next((st for st in s.trip_stops[trip_id] if st[S_SEQ] > seq and st[S_STOP] in dest), None)
             if arrival is None:
                 continue
-            row = self._row(trip_id, stop_id, sched, effective, pred)
+            row = self._row(trip_id, stop_id, sched, effective, pred, base)
             arr_sched = base + arrival[S_ARR]
             arr_pred = self._predict(trip_id, arrival[S_SEQ], base) if pred else None
             if arr_pred and arr_pred["skipped"]:
@@ -572,12 +572,38 @@ class Tracker:
             "generated_at": iso(now),
         }
 
-    def _row(self, trip_id: str, stop_id: str, sched: float, effective: float, pred: dict | None) -> dict:
+    def _final_arrival(self, trip_id: str, base: float, pred: dict | None) -> tuple[str | None, float | None, float | None]:
+        """(final stop name, estimated arrival, scheduled arrival) for a trip."""
+        s = self.static
+        sts = s.trip_stops.get(trip_id)
+        if not sts:
+            return None, None, None
+        last = sts[-1]
+        sched = base + last[S_ARR]
+        est = sched
+        if pred and not pred.get("cancelled"):
+            final_pred = self._predict(trip_id, last[S_SEQ], base)
+            if final_pred and final_pred["time"]:
+                est = final_pred["time"]
+            elif pred.get("delay") is not None:
+                est = sched + pred["delay"]
+        return s.stop_name(last[S_STOP]), est, sched
+
+    def _row(
+        self, trip_id: str, stop_id: str, sched: float, effective: float, pred: dict | None,
+        base: float | None = None,
+    ) -> dict:
         s = self.static
         trip = s.trips[trip_id]
         route = s.routes.get(trip[T_ROUTE], {})
         track = (pred or {}).get("track") or s.stops.get(stop_id, {}).get("platform_code")
+        final_stop, final_arrival, final_sched = (
+            self._final_arrival(trip_id, base, pred) if base is not None else (None, None, None)
+        )
         return {
+            "final_stop": final_stop,
+            "final_arrival": final_arrival,
+            "final_arrival_scheduled": final_sched,
             "trip_id": trip_id,
             "train": trip[T_SHORT_NAME] or (self._rt_by_trip[trip_id].update.vehicle_label if trip_id in self._rt_by_trip else None),
             "route_id": trip[T_ROUTE],
@@ -636,6 +662,9 @@ class Tracker:
                     "cancelled": False,
                     "track": self._track(stu.assigned_stop_id),
                     "delay_reason": None,
+                    "final_stop": s.stop_name(last),
+                    "final_arrival": float(tu.stop_updates[-1].arrival_time or tu.stop_updates[-1].departure_time or 0) or None,
+                    "final_arrival_scheduled": None,
                 })
         return rows
 

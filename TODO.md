@@ -55,7 +55,9 @@ Map tiles were blocked in the dev sandbox, so none of these have been seen actua
 ## 6. Nice to have / known gaps
 
 - [x] Search by line name ("upn" lists all UP-N stations) and an optional **Going to** destination, with arrival times and trip length (done 2026-11-09).
-- [ ] The swap (⇅) button overlaps the From field's clear (×) button while typing. Move it.
+- [x] Fixed: the swap (⇅) button overlapped the From field's clear (×) button.
+- [x] **Home station** (saved on the server, shared by all devices) and **estimated arrival at each train's final station** (done 2026-11-09).
+- [ ] Idea: a full-screen "wall display" mode (`/?kiosk`) showing only the home board in large type, for a tablet by the door.
 
 - [ ] **History UI:** history is API-only right now. Ideas: an "on time 85% (30 days)" note on each departure, or a small history page with charts.
 - [ ] Decide whether to also store train *positions* in history. Today only predictions, cancellations and alerts are stored.

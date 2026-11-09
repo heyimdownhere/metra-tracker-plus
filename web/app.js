@@ -13,6 +13,7 @@
     stationById: new Map(),
     station: localStorage.getItem(STATION_KEY),
     dest: localStorage.getItem(DEST_KEY),
+    home: { home_station: null, home_dest: null },
     departures: null,
     status: null,
   };
@@ -194,6 +195,7 @@
     localStorage.setItem(DEST_KEY, state.dest);
     fromPicker.sync();
     toPicker.sync();
+    updateHomeUi();
     refreshDepartures();
   });
 
@@ -205,6 +207,7 @@
     if (state.dest === id) selectDest("", { refresh: false });
     fromPicker.sync();
     $("board-title").textContent = st.name;
+    updateHomeUi();
     if (opts.pan !== false) mapView.flyTo(st.lat, st.lon);
     refreshDepartures();
   }
@@ -213,8 +216,52 @@
     state.dest = id && state.stationById.has(id) ? id : null;
     if (state.dest) localStorage.setItem(DEST_KEY, state.dest); else localStorage.removeItem(DEST_KEY);
     toPicker.sync();
+    updateHomeUi();
     if (opts.refresh !== false) refreshDepartures();
   }
+
+  // ---------- home station ----------
+  const isHome = () => !!state.home.home_station
+    && state.station === state.home.home_station
+    && (state.dest || null) === (state.home.home_dest || null);
+
+  function updateHomeUi() {
+    const btn = $("home-btn");
+    const go = $("go-home-btn");
+    btn.hidden = !state.station;
+    btn.classList.toggle("is-home", isHome());
+    $("home-btn-text").textContent = isHome() ? "Home" : "Set as home";
+    btn.title = isHome() ? "This is your home station. Click to remove it." : "Open the app on this station (and destination) on every device";
+    go.hidden = !state.home.home_station || isHome();
+  }
+
+  async function saveHome(values) {
+    try {
+      const r = await fetch("/api/settings", {
+        method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      state.home = await r.json();
+    } catch (e) {
+      console.warn(e);
+      alert("Couldn't save the home station. Is the server's /config folder writable?");
+    }
+    updateHomeUi();
+    renderBoard();
+  }
+
+  $("home-btn").addEventListener("click", () => {
+    if (isHome()) {
+      if (confirm("Remove your home station?")) saveHome({ home_station: null, home_dest: null });
+    } else {
+      saveHome({ home_station: state.station, home_dest: state.dest || null });
+    }
+  });
+
+  $("go-home-btn").addEventListener("click", () => {
+    selectDest(state.home.home_dest || "", { refresh: false });
+    selectStation(state.home.home_station);
+  });
 
   // ---------- departure board ----------
   async function refreshDepartures() {
@@ -241,12 +288,20 @@
     p.hidden = !msg;
   }
 
+  // Estimated arrival at the end of the line (skipped when it's the chosen destination).
+  function finalHtml(r, d) {
+    if (!r.final_stop || !r.final_arrival || r.cancelled) return "";
+    if (d.to && r.arrival && r.final_stop === d.to.name) return "";
+    const est = r.live ? "Est." : "Sched.";
+    return `<div class="final">${est} at ${esc(r.final_stop)} <b>${fmtTime(r.final_arrival)}</b></div>`;
+  }
+
   function renderBoard() {
     const d = state.departures;
     if (!d) return;
     const now = Date.now() / 1000;
     const from = d.station ? d.station.name : "";
-    $("board-title").textContent = d.to ? `${from} → ${d.to.name}` : from;
+    $("board-title").innerHTML = esc(d.to ? `${from} → ${d.to.name}` : from) + (isHome() ? '<span class="home-tag">HOME</span>' : "");
     $("board-updated").textContent = `Updated ${fmtTime(d.generated_at)}`;
     if (!d.departures.length) {
       $("board-list").innerHTML = "";
@@ -274,7 +329,8 @@
         <div class="timecol"><div class="time">${fmtTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
         <div class="main"><div class="dest" title="${esc(r.destination)}">${esc(r.destination || r.route_name)}</div>
         <div class="meta">${meta}</div>
-        ${r.arrival ? `<div class="arrive">Arrives <b>${fmtTime(r.arrival)}</b> · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
+        ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} <b>${fmtTime(r.arrival)}</b> · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
+        ${finalHtml(r, d)}
         ${r.delay_reason ? `<div class="reason" title="${esc(r.delay_reason)}">${esc(r.delay_reason)}</div>` : ""}</div>
         <div class="mins">${minsHtml}</div>
       </li>`;
@@ -348,6 +404,14 @@
     state.stations = stations;
     state.stationById = new Map(stations.map((s) => [s.id, s]));
     mapView.setStations(stations);
+    try {
+      state.home = await api("/api/settings");
+    } catch (e) { console.warn(e); }
+    if (state.home.home_station && state.stationById.has(state.home.home_station)) {
+      // Every device opens on the home station.
+      state.station = state.home.home_station;
+      state.dest = state.home.home_dest || null;
+    }
     if (state.dest && !state.stationById.has(state.dest)) state.dest = null;
     toPicker.sync();
     if (state.station && state.stationById.has(state.station)) selectStation(state.station, { pan: false });
