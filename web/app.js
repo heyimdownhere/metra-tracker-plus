@@ -33,6 +33,12 @@
     if (!timeFmt) timeFmt = new Intl.DateTimeFormat([], { hour: "numeric", minute: "2-digit", timeZone: state.tz });
     return timeFmt.format(new Date(epoch * 1000));
   }
+  // "10:26 AM" with a smaller AM/PM, kept on one line.
+  function bigTime(epoch) {
+    const t = fmtTime(epoch);
+    const m = t.match(/^(.*?)\s*([AaPp]\.?\s?[Mm]\.?)$/);
+    return m ? `${esc(m[1])}<span class="ampm">${esc(m[2])}</span>` : esc(t);
+  }
   function delayHtml(delay) {
     if (delay == null) return "";
     const m = Math.round(delay / 60);
@@ -333,7 +339,7 @@
         r.live && !r.cancelled ? delayHtml(r.delay) : "",
       ].filter(Boolean).join("");
       return `<li class="dep${r.cancelled ? " cancelled" : ""}" style="--line:${esc(r.color)}">
-        <div class="timecol"><div class="time">${fmtTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
+        <div class="timecol"><div class="time">${bigTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
         <div class="main"><div class="dest" title="${esc(r.destination)}">${esc(r.destination || r.route_name)}</div>
         <div class="meta">${meta}</div>
         ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)} · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
