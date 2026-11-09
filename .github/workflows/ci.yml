@@ -1,16 +1,16 @@
-# Builds the image and publishes it to GitHub Container Registry
-# (ghcr.io/heyimdownhere/metra-tracker-plus) on every push to main, so the server can
-# pull it instead of building locally. Runs only after the tests pass.
-name: docker
+# Runs the tests on every push and pull request. On pushes to main, once the
+# tests pass, also builds the Docker image and publishes it to GitHub
+# Container Registry (ghcr.io/heyimdownhere/metra-tracker-plus) so the server can
+# pull it instead of building locally.
+name: ci
 
 on:
   push:
-    branches: [main]
+  pull_request:
   workflow_dispatch:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   test:
@@ -26,7 +26,11 @@ jobs:
 
   publish:
     needs: test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
