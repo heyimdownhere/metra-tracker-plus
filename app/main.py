@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_settings
-from .tracker import Tracker, normalize_direction
+from .tracker import AmbiguousStation, Tracker, normalize_direction
 from .user_settings import UserSettings
 
 logging.basicConfig(
@@ -120,6 +120,12 @@ def next_trains(
         raise HTTPException(400, "direction must be inbound/to or outbound/from (or omitted for both)")
     try:
         return _json(tracker.next_trains(station, d, limit))
+    except AmbiguousStation as exc:
+        opts = ", ".join(f"{o['id']} ({'/'.join(o['lines'])})" for o in exc.options)
+        return _json({
+            "detail": f"{station!r} matches more than one station; use an id: {opts}",
+            "options": exc.options,
+        }, 400)
     except KeyError:
         raise HTTPException(404, f"Unknown station {station!r}. See /api/stations for ids.")
 
@@ -133,10 +139,13 @@ def get_settings():
 @app.put("/api/settings")
 def put_settings(changes: dict = Body(...)):
     s = tracker.static
+    if s is None:
+        # Can't validate station ids until the schedule is loaded.
+        raise HTTPException(503, "Schedule not loaded yet")
     for key in ("home_station", "home_dest"):
         if key in changes:
             value = changes[key] or None
-            if value is not None and (not isinstance(value, str) or (s and value not in s.stops)):
+            if value is not None and (not isinstance(value, str) or value not in s.stops):
                 raise HTTPException(400, f"Unknown station for {key}: {value!r}")
             changes[key] = value
     try:
@@ -175,7 +184,7 @@ def commute(
 
 
 def _require_history():
-    if not tracker.history.enabled or tracker.history._db is None:
+    if not tracker.history.available:
         raise HTTPException(404, "History is disabled (needs METRA_API_TOKEN and HISTORY_DAYS > 0)")
 
 
@@ -183,8 +192,10 @@ def _require_history():
 def history_station(station: str = Query(..., min_length=1), days: int = Query(30, ge=1, le=3650)):
     """On-time performance at a station, per scheduled departure."""
     _require_history()
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
     try:
-        stop_ids = tracker._station_stops(station)
+        stop_ids = tracker.station_stops(station)
     except KeyError:
         raise HTTPException(404, f"Unknown station {station!r}")
     tz = tracker.static.tz

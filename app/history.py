@@ -88,10 +88,16 @@ class History:
         self.retention_days = retention_days
         self._lock = threading.Lock()
         self._db: sqlite3.Connection | None = None
+        self._stats_cache: tuple[float, dict] | None = None
 
     @property
     def enabled(self) -> bool:
         return self.retention_days > 0
+
+    @property
+    def available(self) -> bool:
+        """Enabled and the database is open (it only opens when realtime is on)."""
+        return self._db is not None
 
     def open(self) -> None:
         if not self.enabled:
@@ -208,26 +214,42 @@ class History:
             r["routes"] = json.loads(r["routes"] or "[]")
         return rows
 
-    def iter_observations(self, days: int):
-        since = int(time.time()) - days * 86400
+    def iter_observations(self, days: int, batch: int = 5000):
+        """Stream observations in batches on a separate read-only connection.
+
+        WAL mode lets this read run alongside the poller's writes, so a large
+        export neither loads everything into memory nor blocks recording.
+        """
         if not self._db:
             return
-        with self._lock:
-            cur = self._db.execute(
+        since = int(time.time()) - days * 86400
+        db = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, check_same_thread=False)
+        db.row_factory = sqlite3.Row
+        try:
+            cur = db.execute(
                 "SELECT * FROM stop_observations WHERE scheduled >= ? ORDER BY scheduled", (since,)
             )
-            rows = cur.fetchall()
-        for r in rows:
-            yield dict(r)
+            while True:
+                rows = cur.fetchmany(batch)
+                if not rows:
+                    break
+                for r in rows:
+                    yield dict(r)
+        finally:
+            db.close()
 
-    def stats(self) -> dict:
+    def stats(self, max_age: float = 300) -> dict:
+        """Row counts and size. Cached: COUNT(*) scans the table, which grows all year."""
         if not self._db:
             return {"enabled": False}
+        cached = self._stats_cache
+        if cached and time.monotonic() - cached[0] < max_age:
+            return cached[1]
         with self._lock:
             n = self._db.execute("SELECT COUNT(*), MIN(scheduled) FROM stop_observations").fetchone()
             a = self._db.execute("SELECT COUNT(*) FROM alerts_log").fetchone()
         size = sum(p.stat().st_size for p in self.path.parent.glob(self.path.name + "*") if p.exists())
-        return {
+        result = {
             "enabled": True,
             "retention_days": self.retention_days,
             "observations": n[0],
@@ -235,3 +257,5 @@ class History:
             "alerts": a[0],
             "size_bytes": size,
         }
+        self._stats_cache = (time.monotonic(), result)
+        return result

@@ -47,6 +47,15 @@ def normalize_direction(value: str | None) -> str | None:
     return DIRECTION_ALIASES[key]
 
 
+class AmbiguousStation(KeyError):
+    """A station name that matches more than one station."""
+
+    def __init__(self, query: str, options: list[dict]):
+        super().__init__(query)
+        self.query = query
+        self.options = options
+
+
 def _norm_name(x: str) -> str:
     return re.sub(r"[^a-z0-9]", "", x.lower())
 
@@ -200,15 +209,17 @@ class Tracker:
     # ---- realtime feed ---------------------------------------------------
     async def _realtime_loop(self) -> None:
         while True:
-            started = time.monotonic()
             try:
                 await self.refresh_realtime()
             except asyncio.CancelledError:
                 raise
             except Exception:
                 log.exception("Realtime refresh failed")
-            elapsed = time.monotonic() - started
-            await asyncio.sleep(max(self.settings.realtime_interval - elapsed, 5))
+            # Sleep until the guard in refresh_realtime will allow the next poll
+            # (measured from the same timestamp), plus a small margin so a
+            # slightly early wake-up can't cause a skipped poll.
+            since = time.monotonic() - (self._last_rt_poll or 0.0)
+            await asyncio.sleep(max(self.settings.realtime_interval - since, 0) + 0.25)
 
     async def _fetch_feed(self, name: str):
         assert self._client
@@ -257,7 +268,7 @@ class Tracker:
             self.rt.alerts = rtp.parse_alerts(alerts)
         self._trains_cache = None
         self._reindex_realtime()
-        if self.history.enabled and self.history._db is not None:
+        if self.history.available:
             try:
                 rows = self._observation_rows(time.time()) if updates is not None else []
                 await asyncio.to_thread(self.history.record_observations, rows)
@@ -491,13 +502,21 @@ class Tracker:
         for sid in stations:
             if _norm_name(sid) == q:
                 return sid
-        for sid in stations:
-            if _norm_name(s.stops[sid]["name"]) == q:
-                return sid
-        matches = [sid for sid in stations if q and _norm_name(s.stops[sid]["name"]).startswith(q)]
+        exact = [sid for sid in stations if _norm_name(s.stops[sid]["name"]) == q]
+        matches = exact or [sid for sid in stations if q and _norm_name(s.stops[sid]["name"]).startswith(q)]
         if len(matches) == 1:
             return matches[0]
+        if len(matches) > 1:
+            # e.g. "Lake Forest" is two different stations (MD-N and UP-N).
+            lines = {st["id"]: st["routes"] for st in self.stations()}
+            raise AmbiguousStation(query, [
+                {"id": sid, "name": s.stops[sid]["name"], "lines": lines.get(sid, [])} for sid in sorted(matches)
+            ])
         raise KeyError(query)
+
+    def station_stops(self, station_id: str) -> list[str]:
+        """Stop ids belonging to a station id. Raises KeyError."""
+        return self._station_stops(station_id)
 
     def _station_stops(self, station_id: str) -> list[str]:
         s = self.static
@@ -539,11 +558,32 @@ class Tracker:
                         continue
                     yield trip_id, stop_id, seq, base, sched, effective, pred
 
+    def _arrival(self, trip_id: str, seq: int, base: float, dest: set[str], pred: dict | None):
+        """(scheduled, estimated) arrival at the first stop in `dest` after `seq`.
+
+        None if the trip doesn't reach `dest` after this stop or skips it.
+        """
+        s = self.static
+        stop = next((x for x in s.trip_stops[trip_id] if x[S_SEQ] > seq and x[S_STOP] in dest), None)
+        if stop is None:
+            return None
+        sched = base + stop[S_ARR]
+        arr_pred = self._predict(trip_id, stop[S_SEQ], base) if pred else None
+        if arr_pred and arr_pred["skipped"]:
+            return None
+        if arr_pred and arr_pred["time"]:
+            return sched, arr_pred["time"]
+        return sched, sched + ((pred or {}).get("delay") or 0)
+
     def departures(
         self, station_id: str, limit: int = 5, now: float | None = None, to: str | None = None,
         direction: str | None = None,
     ) -> dict:
-        """Next departures from a station; with `to`, only trains that later stop there."""
+        """Next departures from a station.
+
+        `to`: only trains that later stop there (rows gain arrival times).
+        `direction`: "inbound" (toward downtown) or "outbound".
+        """
         s = self.static
         if not s:
             return {"station": None, "departures": []}
@@ -554,23 +594,28 @@ class Tracker:
             dest = set(s.station_children.get(to) or ([to] if to in s.stops else []))
             if not dest:
                 raise KeyError(to)
-        rows = []
+
+        # Cheap filters first; full rows (predictions, final-stop ETA, alert
+        # lookup) are only built for the trains we actually return.
+        candidates = []
         for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(stop_ids, now):
-            row = self._row(trip_id, stop_id, sched, effective, pred, base)
-            if direction and row["direction"] != direction:
-                continue
+            if direction:
+                last = s.trip_stops[trip_id][-1][S_STOP]
+                if self._direction(stop_id, last) != direction:
+                    continue
+            arrival = None
             if dest is not None:
-                arrival = next((x for x in s.trip_stops[trip_id] if x[S_SEQ] > seq and x[S_STOP] in dest), None)
+                arrival = self._arrival(trip_id, seq, base, dest, pred)
                 if arrival is None:
                     continue
-                arr_pred = self._predict(trip_id, arrival[S_SEQ], base) if pred else None
-                if arr_pred and arr_pred["skipped"]:
-                    continue
-                row["arrival_scheduled"] = base + arrival[S_ARR]
-                row["arrival"] = (
-                    arr_pred["time"] if arr_pred and arr_pred["time"]
-                    else row["arrival_scheduled"] + (row["delay"] or 0)
-                )
+            candidates.append((effective, trip_id, stop_id, base, sched, pred, arrival))
+        candidates.sort(key=lambda c: c[0])
+
+        rows = []
+        for effective, trip_id, stop_id, base, sched, pred, arrival in candidates[:limit]:
+            row = self._row(trip_id, stop_id, sched, effective, pred, base)
+            if arrival is not None:
+                row["arrival_scheduled"], row["arrival"] = arrival
             rows.append(row)
         if dest is None:
             rows.extend(
@@ -589,64 +634,59 @@ class Tracker:
             "realtime": self.realtime_live,
         }
 
+    # ---- simple JSON for Home Assistant / scripts ------------------------
+    def _iso(self, t: float | None) -> str | None:
+        return datetime.fromtimestamp(t, self.static.tz).isoformat(timespec="seconds") if t else None
+
+    def _api_train(self, r: dict, now: float) -> dict:
+        """A departure row as plain JSON with ISO times (shared by /api/next and /api/commute)."""
+        delay_min, status = _status(r)
+        out = {
+            "departure": self._iso(r["time"]),
+            "departure_scheduled": self._iso(r["scheduled"]),
+            "minutes_until": max(0, round((r["time"] - now) / 60)),
+            "status": status,
+            "delay_min": delay_min,
+            "live": r["live"],
+            "cancelled": r["cancelled"],
+            "direction": r.get("direction"),
+            "line": r["route_short"],
+            "line_name": r["route_name"],
+            "train": r["train"],
+            "destination": r["destination"],
+            "final_stop": r.get("final_stop"),
+            "final_arrival": self._iso(r.get("final_arrival")),
+            "final_arrival_scheduled": self._iso(r.get("final_arrival_scheduled")),
+            "track": r["track"],
+            "delay_reason": r["delay_reason"],
+        }
+        if "arrival" in r:
+            out["arrival"] = self._iso(r["arrival"])
+            out["arrival_scheduled"] = self._iso(r["arrival_scheduled"])
+            out["duration_min"] = round((r["arrival"] - r["time"]) / 60)
+        return out
+
+    def _summary_part(self, r: dict, status: str, with_destination: bool) -> str:
+        """e.g. '7:30 AM to Chicago OTC (8 min late, track 2: Weather)'."""
+        t = r["scheduled"] if r["cancelled"] and r["scheduled"] else r["time"]
+        text = datetime.fromtimestamp(t, self.static.tz).strftime("%-I:%M %p")
+        if with_destination and r["destination"]:
+            text += f" to {r['destination']}"
+        text += f" ({status}"
+        if r["track"]:
+            text += f", track {r['track']}"
+        if r["delay_reason"]:
+            text += f": {r['delay_reason']}"
+        return text + ")"
+
     def commute(self, from_id: str, to_id: str, limit: int = 3, now: float | None = None) -> dict:
         """Next trains that stop at `from_id` and later at `to_id` (for Home Assistant)."""
         s = self.static
         now = time.time() if now is None else now
-        origin = self._station_stops(from_id)
-        dest = set(s.station_children.get(to_id) or ([to_id] if to_id in s.stops else []))
-        if not dest:
-            raise KeyError(to_id)
-        rows = []
-        for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(origin, now):
-            arrival = next((st for st in s.trip_stops[trip_id] if st[S_SEQ] > seq and st[S_STOP] in dest), None)
-            if arrival is None:
-                continue
-            row = self._row(trip_id, stop_id, sched, effective, pred, base)
-            arr_sched = base + arrival[S_ARR]
-            arr_pred = self._predict(trip_id, arrival[S_SEQ], base) if pred else None
-            if arr_pred and arr_pred["skipped"]:
-                continue
-            row["arrival_scheduled"] = arr_sched
-            row["arrival"] = arr_pred["time"] if arr_pred and arr_pred["time"] else arr_sched + (row["delay"] or 0)
-            rows.append(row)
-        rows.sort(key=lambda r: r["time"])
-        rows = rows[:limit]
-
-        tz = s.tz
-        def iso(t):
-            return datetime.fromtimestamp(t, tz).isoformat(timespec="seconds") if t else None
-        def hm(t):
-            return datetime.fromtimestamp(t, tz).strftime("%-I:%M %p")
-
-        trips, parts = [], []
-        for r in rows:
-            delay_min, status = _status(r)
-            trips.append({
-                "departure": iso(r["time"]),
-                "departure_scheduled": iso(r["scheduled"]),
-                "arrival": iso(r["arrival"]),
-                "arrival_scheduled": iso(r["arrival_scheduled"]),
-                "minutes_until": max(0, round((r["time"] - now) / 60)),
-                "duration_min": round((r["arrival"] - r["time"]) / 60),
-                "delay_min": delay_min,
-                "status": status,
-                "live": r["live"],
-                "cancelled": r["cancelled"],
-                "track": r["track"],
-                "train": r["train"],
-                "line": r["route_short"],
-                "line_name": r["route_name"],
-                "destination": r["destination"],
-                "delay_reason": r["delay_reason"],
-            })
-            text = f"{hm(r['scheduled'] if r['cancelled'] else r['time'])} ({status}"
-            if r["track"]:
-                text += f", track {r['track']}"
-            if r["delay_reason"]:
-                text += f": {r['delay_reason']}"
-            parts.append(text + ")")
-
+        board = self.departures(from_id, limit, now=now, to=to_id)
+        trips = [self._api_train(r, now) for r in board["departures"]]
+        parts = [self._summary_part(r, t["status"], with_destination=False)
+                 for r, t in zip(board["departures"], trips)]
         nxt = next((t for t in trips if not t["cancelled"]), None)
         from_name, to_name = s.stop_name(from_id), s.stop_name(to_id)
         return {
@@ -656,59 +696,33 @@ class Tracker:
             "next_minutes": nxt["minutes_until"] if nxt else None,
             "next_status": nxt["status"] if nxt else None,
             "trips": trips,
-            "message": (f"{from_name} → {to_name}: " + ", ".join(parts)) if parts else f"No upcoming trains {from_name} → {to_name}.",
+            "message": (f"{from_name} \u2192 {to_name}: " + ", ".join(parts)) if parts
+                       else f"No upcoming trains {from_name} \u2192 {to_name}.",
             "realtime": self.realtime_live,
-            "generated_at": iso(now),
+            "generated_at": self._iso(now),
         }
 
     def next_trains(self, station: str, direction: str | None = None, limit: int = 5,
                     now: float | None = None) -> dict:
         """Simple API: next trains at a station, optionally only to/from downtown."""
-        s = self.static
         now = time.time() if now is None else now
         station_id = self.find_station(station)
         board = self.departures(station_id, limit, now=now, direction=direction)
-        tz = s.tz
-
-        def iso(t):
-            return datetime.fromtimestamp(t, tz).isoformat(timespec="seconds") if t else None
-
-        trains, parts = [], []
-        for r in board["departures"]:
-            delay_min, status = _status(r)
-            trains.append({
-                "departure": iso(r["time"]),
-                "departure_scheduled": iso(r["scheduled"]),
-                "minutes_until": max(0, round((r["time"] - now) / 60)),
-                "status": status,
-                "delay_min": delay_min,
-                "live": r["live"],
-                "cancelled": r["cancelled"],
-                "direction": r["direction"],
-                "line": r["route_short"],
-                "line_name": r["route_name"],
-                "train": r["train"],
-                "destination": r["destination"],
-                "final_stop": r["final_stop"],
-                "final_arrival": iso(r["final_arrival"]),
-                "final_arrival_scheduled": iso(r["final_arrival_scheduled"]),
-                "track": r["track"],
-                "delay_reason": r["delay_reason"],
-            })
-            when = datetime.fromtimestamp(r["scheduled"] if r["cancelled"] and r["scheduled"] else r["time"], tz)
-            parts.append(f"{when.strftime('%-I:%M %p')} to {r['destination']} ({status})")
-
+        trains = [self._api_train(r, now) for r in board["departures"]]
+        parts = [self._summary_part(r, t["status"], with_destination=True)
+                 for r, t in zip(board["departures"], trains)]
+        nxt = next((t for t in trains if not t["cancelled"]), None)
         name = board["station"]["name"]
         label = {"inbound": " toward downtown", "outbound": " away from downtown"}.get(direction or "", "")
         return {
             "station": board["station"],
             "direction": direction or "both",
             "trains": trains,
-            "next_departure": trains[0]["departure"] if trains else None,
-            "next_minutes": trains[0]["minutes_until"] if trains else None,
+            "next_departure": nxt["departure"] if nxt else None,
+            "next_minutes": nxt["minutes_until"] if nxt else None,
             "message": (f"{name}{label}: " + ", ".join(parts)) if parts else f"No upcoming trains at {name}{label}.",
             "realtime": board["realtime"],
-            "generated_at": iso(now),
+            "generated_at": self._iso(now),
         }
 
     def _final_arrival(self, trip_id: str, base: float, pred: dict | None) -> tuple[str | None, float | None, float | None]:
@@ -779,7 +793,7 @@ class Tracker:
         for tu in self._added_trips:
             if tu.trip.relationship == rtp.TRIP_CANCELED:
                 continue
-            for stu in tu.stop_updates:
+            for stu in tu.stop_updates[:-1]:  # the last stop is arrival-only
                 if stu.stop_id not in stop_ids or stu.relationship == rtp.SKIPPED:
                     continue
                 t = stu.departure_time or stu.arrival_time

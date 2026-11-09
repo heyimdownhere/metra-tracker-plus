@@ -365,3 +365,86 @@ def test_api_requests_do_not_poll_metra(tracker, monkeypatch):
         tracker.trains(NOW)
         tracker.alerts(NOW)
         tracker.commute("A", "C", now=NOW)
+
+
+# ---- regression tests from code review -------------------------------------
+
+def test_ambiguous_station_name_is_rejected_not_guessed(tracker):
+    from app.tracker import AmbiguousStation
+
+    s = tracker.static
+    # Add a second "Alpha" on another line, like Metra's two Lake Forest stations.
+    s.stops["A2"] = {**s.stops["A"], "id": "A2", "lat": 42.0}
+    s.station_children["A2"] = ["A2"]
+    with pytest.raises(AmbiguousStation) as exc:
+        tracker.find_station("Alpha")
+    assert {o["id"] for o in exc.value.options} == {"A", "A2"}
+    assert tracker.find_station("A2") == "A2"  # ids still work
+
+
+def test_added_trip_final_stop_is_not_a_departure(tracker):
+    e = pb.FeedEntity(id="x")
+    e.trip_update.trip.trip_id = "EXTRA-1"
+    e.trip_update.trip.route_id = "L1"
+    e.trip_update.trip.schedule_relationship = pb.TripDescriptor.ADDED
+    for stop, t in (("B", NOW + 600), ("C", NOW + 1800)):
+        u = e.trip_update.stop_time_update.add()
+        u.stop_id = stop
+        u.arrival.time = int(t)
+    _apply(tracker, [e])
+    at_b = tracker._added_departures({"B"}, NOW)
+    assert len(at_b) == 1 and at_b[0]["direction"] == "inbound" and at_b[0]["final_stop"] == "Central"
+    assert tracker._added_departures({"C"}, NOW) == []  # ends at C: not a departure
+
+
+def test_poll_loop_never_skips_a_poll(tracker, monkeypatch):
+    """The loop must wait on the guard's own clock, so polls land every ~30s, not 60s."""
+    import asyncio
+
+    clock = [1000.0]
+    polls = []
+    monkeypatch.setattr("app.tracker.time.monotonic", lambda: clock[0])
+
+    async def fake_fetch(name):
+        return None
+
+    async def fake_sleep(seconds):
+        clock[0] += seconds - 1e-6  # wake a hair early, as event loops may
+        if len(polls) >= 4:
+            raise asyncio.CancelledError
+
+    monkeypatch.setattr(tracker, "_fetch_feed", fake_fetch)
+    orig = tracker.refresh_realtime
+
+    async def counted():
+        r = await orig()
+        if r:
+            polls.append(clock[0])
+        return r
+
+    monkeypatch.setattr(tracker, "refresh_realtime", counted)
+    monkeypatch.setattr("app.tracker.asyncio.sleep", fake_sleep)
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(tracker._realtime_loop())
+    gaps = [b - a for a, b in zip(polls, polls[1:])]
+    assert len(polls) == 4 and all(30 <= g < 31 for g in gaps), gaps
+
+
+def test_endpoints_return_503_not_500_before_schedule_loads(tmp_path, monkeypatch):
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path))
+    monkeypatch.setenv("METRA_API_TOKEN", "")
+    import importlib
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    main = importlib.reload(main)
+    c = TestClient(main.app)  # no lifespan: schedule never loads
+    assert c.put("/api/settings", json={"home_station": "typo"}).status_code == 503
+    assert not (tmp_path / "settings.json").exists()
+    main.tracker.history._db = object()  # pretend history is open
+    try:
+        assert c.get("/api/history/station?station=X").status_code == 503
+    finally:
+        main.tracker.history._db = None
+    assert c.get("/api/next?station=X").status_code == 503
+    assert c.get("/api/next?station=X&direction=sideways").status_code in (400, 503)
