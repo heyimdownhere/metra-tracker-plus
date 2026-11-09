@@ -59,7 +59,7 @@ Still to check: the **Tracking** estimate itself hasn't been seen on a real in-s
 ## 5. Next features (picked 2026-11-09)
 
 - [ ] **"Leave now" alerts.** Set how long it takes to get to your station; get told when to leave, adjusted for live delays ("Leave by 7:04 for the 7:12, running 3 min late"). Deliver via Home Assistant (`notify.mobile_app_…`) or ntfy.
-- [ ] **Switch direction by time of day.** Mornings: home station toward downtown. Evenings: work station back home. Needs a saved "work" station next to home, and a cut-over time (e.g. noon).
+- [x] **Switch direction by time of day** (done 2026-11-09): work station, switch time and workdays, set in the app (briefcase button, searchable pickers) or via `WORK_STATION` / `COMMUTE_SWITCH_TIME` / `WORK_DAYS`. `/api/now` and `/api/work` endpoints.
 - [ ] **Alerts for your own stations.** Feature station-level alerts (elevator outages, entrance closures) for your home/work stations, and notify when one affects your train.
 - [ ] **Remote access with Tailscale.** Install the Tailscale plugin on Unraid so your phone reaches the server from anywhere, privately. Don't port-forward 8080: the app has no login.
 

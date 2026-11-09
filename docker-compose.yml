@@ -1,16 +1,26 @@
+# Settings come from a .env file next to this one (copy .env.example to .env).
+# Every value has a default, so `docker compose up -d` works with no .env.
 services:
   metra-tracker-plus:
+    image: ${IMAGE:-ghcr.io/heyimdownhere/metra-tracker-plus:latest}
     build: .
-    image: metra-tracker-plus:latest
     container_name: metra-tracker-plus
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      # Host port (what you type in the browser) : port inside the container.
+      - "${WEB_PORT:-8080}:${PORT:-8080}"
     volumes:
-      - /mnt/user/appdata/metra-tracker:/config
+      - ${APPDATA:-/mnt/user/appdata/metra-tracker}:/config
     environment:
-      # Leave empty to run schedule-only until your Metra API key arrives.
-      - METRA_API_TOKEN=${METRA_API_TOKEN:-}
-      - TZ=America/Chicago
-      # Days of realtime history kept in /config/history.db (0 disables).
-      - HISTORY_DAYS=365
+      METRA_API_TOKEN: ${METRA_API_TOKEN:-}
+      TZ: ${TZ:-America/Chicago}
+      PORT: ${PORT:-8080}
+      HOME_STATION: ${HOME_STATION:-}
+      HOME_DESTINATION: ${HOME_DESTINATION:-}
+      WORK_STATION: ${WORK_STATION:-}
+      COMMUTE_SWITCH_TIME: ${COMMUTE_SWITCH_TIME:-12:00}
+      WORK_DAYS: ${WORK_DAYS:-mon-fri}
+      HISTORY_DAYS: ${HISTORY_DAYS:-365}
+      REALTIME_INTERVAL: ${REALTIME_INTERVAL:-30}
+      STATIC_CHECK_INTERVAL: ${STATIC_CHECK_INTERVAL:-300}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}

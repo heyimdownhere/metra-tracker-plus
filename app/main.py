@@ -9,7 +9,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
-import os
+import time
 from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -19,23 +19,91 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from .config import load_settings
+from .config import load_settings, parse_switch_time, parse_work_days
 from .tracker import AmbiguousStation, Tracker, normalize_direction
 from .user_settings import UserSettings
 
-logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
-
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 settings = load_settings()
+logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+log = logging.getLogger("metra")
 tracker = Tracker(settings)
 user_settings = UserSettings(settings.config_dir / "settings.json")
 
 
+_warned: set[str] = set()
+
+
+def _resolve_env_station(name: str, value: str | None) -> str | None:
+    """Env station values may be an id ("EVANSTON") or a name ("Evanston (Davis St.)")."""
+    if not value:
+        return None
+    try:
+        return tracker.find_station(value)
+    except KeyError:
+        if (name, value) not in _warned:  # warn once, not on every request
+            _warned.add((name, value))
+            log.warning("%s=%r doesn't match a station (or matches several); see /api/stations", name, value)
+        return None
+
+
+def profile(now: float | None = None) -> dict:
+    """The commute profile: home, work, switch time and workdays.
+
+    Values saved in the app win; anything not set there falls back to the
+    environment (HOME_STATION, HOME_DESTINATION, WORK_STATION,
+    COMMUTE_SWITCH_TIME, WORK_DAYS). `leg` says which board to open now.
+    """
+    cfg = user_settings.load()
+    loaded = tracker.static is not None
+    out = {}
+    if cfg["home_station"]:
+        out.update(home_station=cfg["home_station"], home_dest=cfg["home_dest"], source="app")
+    elif loaded and settings.home_station:
+        home_id = _resolve_env_station("HOME_STATION", settings.home_station)
+        out.update(home_station=home_id,
+                   home_dest=_resolve_env_station("HOME_DESTINATION", settings.home_destination) if home_id else None,
+                   source="env" if home_id else None)
+    else:
+        out.update(home_station=None, home_dest=None, source=None)
+    if cfg["work_station"]:
+        out.update(work_station=cfg["work_station"], work_source="app")
+    else:
+        work_id = _resolve_env_station("WORK_STATION", settings.work_station) if loaded else None
+        out.update(work_station=work_id, work_source="env" if work_id else None)
+    out["switch_time"] = cfg["switch_time"] or settings.commute_switch_time
+    out["work_days"] = list(cfg["work_days"] if cfg["work_days"] is not None else settings.work_days)
+    out["leg"] = _commute_leg(out, now) if loaded else None
+    return out
+
+
+def _commute_leg(p: dict, now: float | None = None) -> dict | None:
+    """Which trip to show right now.
+
+    On a workday with both home and work set: before the switch time it's
+    home -> work, after it work -> home. Otherwise just the home board.
+    """
+    home, work = p["home_station"], p["work_station"]
+    if not home:
+        return None
+    local = datetime.fromtimestamp(time.time() if now is None else now, tracker.static.tz)
+    if work and work != home and local.weekday() in p["work_days"]:
+        if local.strftime("%H:%M") < p["switch_time"]:
+            return {"leg": "to_work", "from": home, "to": work}
+        return {"leg": "to_home", "from": work, "to": home}
+    return {"leg": "home", "from": home, "to": p["home_dest"]}
+
+
+def effective_home() -> dict:
+    """Backwards-compatible alias: the profile (home_station/home_dest/source + work fields)."""
+    return profile()
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    log.info(settings.summary())
+    for warning in settings.warnings:
+        log.warning("Config: %s", warning)
     await tracker.start()
     yield
     await tracker.stop()
@@ -136,8 +204,12 @@ def next_trains(
 
 @app.get("/api/settings")
 def get_settings():
-    """Settings shared by all devices, e.g. the home station."""
-    return _json(user_settings.load())
+    """Settings shared by all devices, e.g. the home station.
+
+    `source` says where the home station came from: "app" (saved with
+    "Set as home"), "env" (HOME_STATION), or null (none).
+    """
+    return _json(effective_home())
 
 
 @app.put("/api/settings")
@@ -146,30 +218,71 @@ def put_settings(changes: dict = Body(...)):
     if s is None:
         # Can't validate station ids until the schedule is loaded.
         raise HTTPException(503, "Schedule not loaded yet")
-    for key in ("home_station", "home_dest"):
+    for key in ("home_station", "home_dest", "work_station"):
         if key in changes:
             value = changes[key] or None
             if value is not None and (not isinstance(value, str) or value not in s.stops):
                 raise HTTPException(400, f"Unknown station for {key}: {value!r}")
             changes[key] = value
+    if "switch_time" in changes and changes["switch_time"] not in (None, ""):
+        parsed = parse_switch_time(str(changes["switch_time"]))
+        if parsed is None:
+            raise HTTPException(400, "switch_time must be a time like 12:00")
+        changes["switch_time"] = parsed
+    elif "switch_time" in changes:
+        changes["switch_time"] = None
+    if "work_days" in changes and changes["work_days"] is not None:
+        parsed_days = parse_work_days(changes["work_days"])
+        if parsed_days is None:
+            raise HTTPException(400, "work_days must be weekdays like [0,1,2,3,4] (Monday = 0) or 'mon-fri'")
+        changes["work_days"] = list(parsed_days)
     try:
-        return _json(user_settings.update(changes))
+        user_settings.update(changes)
+        return _json(effective_home())
     except OSError as exc:
         raise HTTPException(500, f"Could not save settings: {exc}")
 
 
-@app.get("/api/home")
-def home(limit: int = Query(5, ge=1, le=20)):
-    """Departure board for the saved home station (handy for wall displays and Home Assistant)."""
-    cfg = user_settings.load()
-    if not cfg["home_station"]:
-        raise HTTPException(404, "No home station set")
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
+def _board(from_id: str, to_id: str | None, limit: int, extra: dict | None = None):
     try:
-        return _json(tracker.departures(cfg["home_station"], limit, to=cfg["home_dest"]))
+        board = tracker.departures(from_id, limit, to=to_id or None)
     except KeyError as exc:
         raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
+    return _json({**board, **(extra or {})})
+
+
+@app.get("/api/home")
+def home(limit: int = Query(5, ge=1, le=20)):
+    """Departure board for the home station (to its home destination, if set)."""
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    p = profile()
+    if not p["home_station"]:
+        raise HTTPException(404, "No home station set (use 'Set as home' in the app, or HOME_STATION)")
+    return _board(p["home_station"], p["home_dest"], limit)
+
+
+@app.get("/api/work")
+def work(limit: int = Query(5, ge=1, le=20)):
+    """Departure board for the trip home from work (work station -> home station)."""
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    p = profile()
+    if not p["work_station"]:
+        raise HTTPException(404, "No work station set (use 'Set as work' in the app, or WORK_STATION)")
+    return _board(p["work_station"], p["home_station"], limit)
+
+
+@app.get("/api/now")
+def now_board(limit: int = Query(5, ge=1, le=20)):
+    """The board for right now: home -> work before the switch time on workdays,
+    work -> home after it, otherwise the home board. `leg` says which."""
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    leg = profile()["leg"]
+    if not leg:
+        raise HTTPException(404, "No home station set (use 'Set as home' in the app, or HOME_STATION)")
+    return _board(leg["from"], leg["to"], limit, {"leg": leg["leg"]})
 
 
 @app.get("/api/commute")

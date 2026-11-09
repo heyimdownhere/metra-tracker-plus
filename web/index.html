@@ -28,6 +28,9 @@
     </div>
     <div class="topbar-right">
       <span id="mode-pill" class="pill" title="">Loading…</span>
+      <button id="commute-btn" class="icon-btn" type="button" aria-label="Commute settings" title="Commute: home, work and times">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6a2 2 0 0 1 2 2v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2Zm0 4h6V5H9v2Z"/></svg>
+      </button>
       <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle light/dark mode">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>
       </button>
@@ -49,10 +52,16 @@
         <div class="picker-field">
           <div class="picker-label-row">
             <label for="station-input" class="picker-label">From</label>
-            <button id="home-btn" class="home-btn" type="button" hidden>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
-              <span id="home-btn-text">Set as home</span>
-            </button>
+            <div class="pick-actions">
+              <button id="home-btn" class="home-btn" type="button" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
+                <span id="home-btn-text">Set as home</span>
+              </button>
+              <button id="work-btn" class="home-btn" type="button" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6a2 2 0 0 1 2 2v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2Zm0 4h6V5H9v2Z"/></svg>
+                <span id="work-btn-text">Set as work</span>
+              </button>
+            </div>
           </div>
           <div class="picker-box">
             <input id="station-input" type="search" autocomplete="off" spellcheck="false"
@@ -82,7 +91,7 @@
           <h2 id="board-title">Choose a station</h2>
           <button id="go-home-btn" class="home-btn go-home" type="button" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
-            <span>Home</span>
+            <span id="go-home-text">Home</span>
           </button>
           <span id="board-updated" class="muted small"></span>
         </div>
@@ -104,6 +113,49 @@
       <div id="map-note" class="map-note" hidden></div>
     </section>
   </main>
+
+  <dialog id="commute-dialog" class="sheet">
+    <form id="commute-form" method="dialog" autocomplete="off">
+      <h2>Your commute</h2>
+      <p class="muted small">On workdays the app opens on <b>home → work</b> until the switch time, then <b>work → home</b>. Other days it opens on your home station. Saved on the server, so every device gets it. Anything left unset here falls back to the Docker/Unraid settings, if any.</p>
+
+      <div class="field">
+        <div class="field-label"><span>Home station</span><span id="cm-home-src" class="hint"></span></div>
+        <div class="picker-box">
+          <input id="cm-home" type="search" placeholder="Not set: search station or line" role="combobox" aria-expanded="false" aria-controls="cm-home-list" aria-autocomplete="list">
+          <ul id="cm-home-list" class="station-list" role="listbox" hidden></ul>
+        </div>
+      </div>
+
+      <div class="field">
+        <div class="field-label"><span>Work station <span class="optional">(optional)</span></span><span id="cm-work-src" class="hint"></span></div>
+        <div class="picker-box">
+          <input id="cm-work" type="search" placeholder="Not set: search station or line" role="combobox" aria-expanded="false" aria-controls="cm-work-list" aria-autocomplete="list">
+          <ul id="cm-work-list" class="station-list" role="listbox" hidden></ul>
+        </div>
+      </div>
+
+      <div id="cm-work-fields">
+        <div class="field">
+          <div class="field-label"><span>Show trains home from</span><span id="cm-time-src" class="hint"></span></div>
+          <div class="time-row">
+            <input id="cm-time" type="time" step="300">
+            <div class="chips-row" id="cm-time-presets"></div>
+          </div>
+        </div>
+        <fieldset class="field">
+          <legend class="field-label"><span>Workdays</span><span id="cm-days-src" class="hint"></span></legend>
+          <div class="days" id="cm-days"></div>
+        </fieldset>
+      </div>
+      <p id="cm-work-note" class="muted small" hidden>Add a work station to switch between home → work and work → home automatically.</p>
+
+      <div class="btns">
+        <button type="button" id="commute-cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
 
   <script src="vendor/maplibre/maplibre-gl.js"></script>
   <script src="map.js"></script>

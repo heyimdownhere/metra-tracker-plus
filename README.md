@@ -109,15 +109,27 @@ The server does all the talking to Metra; your phone only downloads small summar
 
 ## Configuration
 
+Everything is optional; with nothing set the app runs schedule-only and asks for your stations on first use. Set values as environment variables: Unraid template fields, `.env` for docker compose (copy `.env.example`), or `-e` with `docker run`. The container log starts with a summary of the settings it picked up (API key masked), and warns about any value it couldn't use.
+
 | Variable | Default | Purpose |
 |---|---|---|
-| `METRA_API_TOKEN` | *(empty)* | Metra GTFS-RT token. Empty means schedule-only. |
-| `TZ` | `America/Chicago` | Container timezone. |
-| `HISTORY_DAYS` | `365` | Days of realtime history to keep. `0` disables history. |
-| `REALTIME_INTERVAL` | `30` | Realtime poll interval in seconds. Minimum 30. |
-| `STATIC_CHECK_INTERVAL` | `300` | How often to check `published.txt`, in seconds. |
-| `PORT` | `8080` | Listen port inside the container. |
-| `LOG_LEVEL` | `INFO` | Python log level. |
+| `METRA_API_TOKEN` | *(empty)* | Metra GTFS-RT API key. Empty = schedule-only. |
+| `METRA_API_TOKEN_FILE` | *(empty)* | Read the key from a file instead (Docker/compose secrets). The variable wins if both are set. |
+| `HOME_STATION` | *(empty)* | Default home station: an id (`EVANSTON`) or a name (`Evanston (Davis St.)`). Ids are at `/api/stations`. |
+| `HOME_DESTINATION` | *(empty)* | Default "Going to" for the home board (when no work station is set). |
+| `WORK_STATION` | *(empty)* | Work station. On workdays the app opens on home → work before the switch time, work → home after. |
+| `COMMUTE_SWITCH_TIME` | `12:00` | When to switch from trains to work to trains home (24-hour `HH:MM`). |
+| `WORK_DAYS` | `mon-fri` | Commute days, e.g. `mon-fri`, `mon,tue,thu`. Other days open on the home board. |
+| `TZ` | `America/Chicago` | Container time zone (logs). The app always uses Metra's Chicago time. |
+| `HISTORY_DAYS` | `365` | Days of delay history to keep (0–3650). `0` disables history. |
+| `REALTIME_INTERVAL` | `30` | Seconds between realtime polls (30–3600). Metra's minimum is 30. |
+| `STATIC_CHECK_INTERVAL` | `300` | Seconds between checks for a new schedule (60–86400). |
+| `PORT` | `8080` | Port the app listens on **inside** the container. To change the port you open in the browser, change the host side of the port mapping instead (Unraid "Web UI port", compose `WEB_PORT`). |
+| `HOST` | `0.0.0.0` | Address the app listens on inside the container. |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`. |
+| `CONFIG_DIR` | `/config` | Where the schedule cache, history and settings live (mount your appdata here). |
+
+**Home, work, switch time and workdays can also be set in the app**: tap the briefcase (top right), or "Set as home" / "Set as work" next to the station field. Values saved in the app win over the environment; anything left unset in the app falls back to the environment. On a fresh install with nothing set, the board shows a "Set up your commute" card.
 
 A weekday has about 11,500 train-stop events, so history grows by roughly 3 MB a day while realtime is on (about 1 GB for a full year). Rows older than `HISTORY_DAYS` are pruned every 6 hours.
 
@@ -166,7 +178,9 @@ Example: `curl "http://SERVER-IP:8080/api/next?station=EVANSTON&direction=inboun
 | `GET /api/stations` | Stations with the lines that serve them. |
 | `GET /api/next?station=EVANSTON&direction=inbound` | **Next 5 trains** at a station. `direction`: `inbound`/`to` = toward downtown, `outbound`/`from` = away from downtown, omit for both. `station` takes an id or a name (`Evanston (Davis St.)`). Optional `limit` (1–20). Returns ISO times, minutes until, status, line, train number, destination, estimated arrival at the final stop, and a ready-made `message`. |
 | `GET /api/departures?station=ID&limit=5[&to=ID][&direction=inbound]` | Departure board; with `to`, only trains that later stop there. Each row includes `final_stop` and `final_arrival` (estimated arrival at the end of the line). |
-| `GET /api/settings` / `PUT /api/settings` | Shared settings: `{"home_station": "EVANSTON", "home_dest": null}`. |
+| `GET /api/settings` / `PUT /api/settings` | Commute profile shared by all devices: `home_station`, `home_dest`, `work_station`, `switch_time`, `work_days` (Monday = 0), plus `leg` (which trip applies right now) and where each value came from (`app`/`env`). |
+| `GET /api/now?limit=5` | The board for right now: home → work before the switch time on workdays, work → home after, otherwise the home board. `leg` says which. Ideal for Home Assistant. |
+| `GET /api/work?limit=5` | Work → home board. |
 | `GET /api/home?limit=5` | Departure board for the saved home station (also handy for Home Assistant or a wall display). |
 | `GET /api/trains` | Train positions (live, or estimated from the schedule). |
 | `GET /api/alerts` | Active service alerts. |

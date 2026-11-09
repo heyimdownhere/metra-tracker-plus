@@ -138,7 +138,7 @@
     return scored.map((x) => x[1]);
   }
 
-  function makePicker({ inputId, listId, getValue, onSelect, allowClear }) {
+  function makePicker({ inputId, listId, getValue, onSelect, allowClear, clearLabel = "Any destination" }) {
     const input = $(inputId);
     const list = $(listId);
     let matches = [];
@@ -152,7 +152,7 @@
     function render() {
       matches = stationMatches(input.value).slice(0, 80);
       active = matches.length ? 0 : -1;
-      const clear = allowClear && getValue() ? '<li role="option" data-id="" class="clear-opt">Any destination</li>' : "";
+      const clear = allowClear && getValue() ? `<li role="option" data-id="" class="clear-opt">${esc(clearLabel)}</li>` : "";
       list.innerHTML = clear + (matches.length
         ? matches.map((s, i) => `<li role="option" id="${listId}-${i}" data-id="${esc(s.id)}" aria-selected="${i === active}"><span>${esc(s.name)}</span><span class="chips">${routeChips(s.routes)}</span></li>`).join("")
         : '<li class="empty">No matching stations</li>');
@@ -241,48 +241,162 @@
     if (opts.refresh !== false) refreshDepartures();
   }
 
-  // ---------- home station ----------
-  const isHome = () => !!state.home.home_station
-    && state.station === state.home.home_station
-    && (state.dest || null) === (state.home.home_dest || null);
+  // ---------- home / work / commute ----------
+  // state.home is the server's commute profile: home_station, home_dest,
+  // work_station, switch_time, work_days, source/work_source ("app"/"env"),
+  // and leg = {leg: "to_work"|"to_home"|"home", from, to} for right now.
+  const viewIs = (from, to) => !!from && state.station === from && (state.dest || null) === (to || null);
+  const isHome = () => viewIs(state.home.home_station, state.home.home_dest);
+  const isWork = () => !!state.home.work_station && state.station === state.home.work_station;
+  const onLeg = () => !!state.home.leg && viewIs(state.home.leg.from, state.home.leg.to);
 
-  function updateHomeUi() {
-    const btn = $("home-btn");
-    const go = $("go-home-btn");
-    btn.hidden = !state.station;
-    btn.classList.toggle("is-home", isHome());
-    $("home-btn-text").textContent = isHome() ? "Home" : "Set as home";
-    btn.title = isHome() ? "This is your home station. Click to remove it." : "Open the app on this station (and destination) on every device";
-    go.hidden = !state.home.home_station || isHome();
+  // Tag shown next to the board title for the commute views.
+  function viewTag() {
+    const p = state.home;
+    if (viewIs(p.home_station, p.work_station) && p.work_station) return "TO WORK";
+    if (viewIs(p.work_station, p.home_station) && p.work_station) return "TO HOME";
+    if (isHome()) return "HOME";
+    if (isWork()) return "WORK";
+    return "";
   }
 
-  async function saveHome(values) {
+  function updateHomeUi() {
+    const p = state.home;
+    const homeBtn = $("home-btn"), workBtn = $("work-btn"), go = $("go-home-btn");
+    homeBtn.hidden = workBtn.hidden = !state.station;
+    const atHome = !!p.home_station && state.station === p.home_station;
+    homeBtn.classList.toggle("is-home", atHome);
+    $("home-btn-text").textContent = atHome ? "Home" : "Set as home";
+    homeBtn.title = atHome ? "Your home station" : "Make this your home station (opens here on every device)";
+    workBtn.classList.toggle("is-home", isWork());
+    $("work-btn-text").textContent = isWork() ? "Work" : "Set as work";
+    workBtn.title = isWork() ? "Your work station" : "Make this your work station";
+    // The quick button jumps to the right trip for the time of day.
+    const leg = p.leg;
+    go.hidden = !leg || onLeg();
+    $("go-home-text").textContent = !leg ? "Home" : leg.leg === "to_work" ? "To work" : leg.leg === "to_home" ? "To home" : "Home";
+  }
+
+  async function saveProfile(values, what) {
     try {
       const r = await fetch("/api/settings", {
         method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(values),
       });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
       state.home = await r.json();
     } catch (e) {
       console.warn(e);
-      alert("Couldn't save the home station. Is the server's /config folder writable?");
+      alert(`Couldn't save the ${what}: ${e.message}`);
     }
     updateHomeUi();
     renderBoard();
+    renderAlerts();
   }
 
+  const envNote = (name) => `This comes from the ${name} setting on the server (Docker/Unraid). Change it there, or set a different one here to override it.`;
+
   $("home-btn").addEventListener("click", () => {
-    if (isHome()) {
-      if (confirm("Remove your home station?")) saveHome({ home_station: null, home_dest: null });
+    const p = state.home;
+    if (p.home_station && state.station === p.home_station) {
+      if (p.source === "env") alert(envNote("HOME_STATION"));
+      else if (confirm("Remove your home station?")) saveProfile({ home_station: null, home_dest: null }, "home station");
     } else {
-      saveHome({ home_station: state.station, home_dest: state.dest || null });
+      // Keep a "Going to" as the home destination only when no work station is set.
+      saveProfile({ home_station: state.station, home_dest: p.work_station ? null : (state.dest || null) }, "home station");
     }
   });
 
-  $("go-home-btn").addEventListener("click", () => {
-    selectDest(state.home.home_dest || "", { refresh: false });
-    selectStation(state.home.home_station);
+  $("work-btn").addEventListener("click", () => {
+    const p = state.home;
+    if (isWork()) {
+      if (p.work_source === "env") alert(envNote("WORK_STATION"));
+      else if (confirm("Remove your work station?")) saveProfile({ work_station: null }, "work station");
+    } else {
+      saveProfile({ work_station: state.station }, "work station");
+    }
   });
+
+  function goToLeg() {
+    const leg = state.home.leg;
+    if (!leg) return;
+    selectDest(leg.to || "", { refresh: false });
+    selectStation(leg.from);
+  }
+  $("go-home-btn").addEventListener("click", goToLeg);
+
+  // ---------- commute settings panel ----------
+  // Works whether or not anything is configured: unset stations show
+  // "Not set", time and days show their defaults. Values that come from the
+  // Docker/Unraid settings are labelled, and only sent back if changed.
+  const DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+  const TIME_PRESETS = [["10:00", "10 AM"], ["11:00", "11 AM"], ["12:00", "Noon"], ["13:00", "1 PM"], ["14:00", "2 PM"]];
+  const draft = { home: null, work: null };
+  const homePick = makePicker({
+    inputId: "cm-home", listId: "cm-home-list", allowClear: true, clearLabel: "Not set",
+    getValue: () => draft.home, onSelect: (id) => { draft.home = id || null; syncDraft(); },
+  });
+  const workPick = makePicker({
+    inputId: "cm-work", listId: "cm-work-list", allowClear: true, clearLabel: "No work station",
+    getValue: () => draft.work, onSelect: (id) => { draft.work = id || null; syncDraft(); },
+  });
+  $("cm-days").innerHTML = DAYS.map((d, i) =>
+    `<label class="day"><input type="checkbox" name="day" value="${i}"><span>${d}</span></label>`).join("");
+  $("cm-time-presets").innerHTML = TIME_PRESETS.map(([t, label]) =>
+    `<button type="button" class="chip-btn" data-time="${t}">${label}</button>`).join("");
+  $("cm-time-presets").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-time]");
+    if (b) { $("cm-time").value = b.dataset.time; syncDraft(); }
+  });
+  $("cm-time").addEventListener("input", syncDraft);
+
+  function syncDraft() {
+    homePick.sync();
+    workPick.sync();
+    const hasWork = !!draft.work;
+    $("cm-work-fields").hidden = !hasWork;
+    $("cm-work-note").hidden = hasWork;
+    const t = $("cm-time").value;
+    document.querySelectorAll("#cm-time-presets [data-time]").forEach((b) => b.classList.toggle("on", b.dataset.time === t));
+  }
+
+  function openCommute() {
+    const p = state.home;
+    draft.home = p.home_station || null;
+    draft.work = p.work_station || null;
+    const src = (s, name) => s === "env" ? `from ${name}` : "";
+    $("cm-home-src").textContent = src(p.source, "HOME_STATION");
+    $("cm-work-src").textContent = src(p.work_source, "WORK_STATION");
+    $("cm-time").value = p.switch_time || "12:00";
+    document.querySelectorAll("#cm-days input").forEach((cb) => { cb.checked = (p.work_days || [0, 1, 2, 3, 4]).includes(Number(cb.value)); });
+    syncDraft();
+    $("commute-dialog").showModal();
+    if (!draft.home) setTimeout(() => $("cm-home").focus(), 50);
+  }
+
+  $("commute-btn").addEventListener("click", openCommute);
+  $("commute-cancel").addEventListener("click", () => $("commute-dialog").close());
+  $("commute-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const p = state.home;
+    if (draft.home && draft.work && draft.home === draft.work) { alert("Home and work need to be different stations."); return; }
+    if (draft.work && !draft.home) { alert("Pick a home station too, so the app knows where to take you after work."); return; }
+    const days = [...document.querySelectorAll("#cm-days input:checked")].map((cb) => Number(cb.value));
+    if (draft.work && !days.length) { alert("Pick at least one workday."); return; }
+    const values = { switch_time: $("cm-time").value || null, work_days: days };
+    // Only send stations that changed, so values from the environment aren't copied into the app.
+    if (draft.home !== (p.home_station || null)) { values.home_station = draft.home; values.home_dest = null; }
+    if (draft.work !== (p.work_station || null)) values.work_station = draft.work;
+    $("commute-dialog").close();
+    await saveProfile(values, "commute");
+    goToLeg();
+  });
+
+  // First run: nothing configured anywhere -> invite the user to set it up.
+  function setupCardHtml() {
+    if (state.home.home_station) return "";
+    return `<li class="setup-card"><div><b>Set up your commute</b><br><span class="muted small">Pick your home (and work) station so the app opens on the right trains.</span></div><button type="button" class="primary" id="setup-commute">Set up</button></li>`;
+  }
+  document.addEventListener("click", (e) => { if (e.target.id === "setup-commute") openCommute(); });
 
   // ---------- departure board ----------
   async function refreshDepartures() {
@@ -346,7 +460,8 @@
     if (!d) return;
     const now = serverNow();
     const from = d.station ? d.station.name : "";
-    $("board-title").innerHTML = esc(d.to ? `${from} → ${d.to.name}` : from) + (isHome() ? '<span class="home-tag">HOME</span>' : "");
+    const tag = viewTag();
+    $("board-title").innerHTML = esc(d.to ? `${from} → ${d.to.name}` : from) + (tag ? `<span class="home-tag">${tag}</span>` : "");
     $("board-updated").textContent = `Updated ${fmtTime(d.generated_at)}`;
     if (!d.departures.length) {
       $("board-list").innerHTML = "";
@@ -356,7 +471,7 @@
       return;
     }
     showEmpty("");
-    $("board-list").innerHTML = d.departures.map((r) => {
+    $("board-list").innerHTML = setupCardHtml() + d.departures.map((r) => {
       const mins = Math.max(0, Math.round((r.time - now) / 60));
       const minsHtml = r.cancelled ? "<b>—</b>" : mins === 0 ? "<b>Now</b>" : `<b>${mins}</b><span>min</span>`;
       const changed = r.scheduled && Math.abs(r.time - r.scheduled) >= 60;
@@ -405,7 +520,7 @@
     const box = $("alerts");
     if (!alerts.length) { box.hidden = true; return; }
     const myLines = new Set();
-    for (const id of [state.station, state.dest, state.home.home_station, state.home.home_dest]) {
+    for (const id of [state.station, state.dest, state.home.home_station, state.home.home_dest, state.home.work_station]) {
       const st = state.stationById.get(id);
       if (st) st.routes.forEach((r) => myLines.add(r));
     }
@@ -462,7 +577,18 @@
       pill.title = errs.join("\n") || "Waiting for realtime data; showing schedule.";
     }
     $("data-version").textContent = s.static_version ? `Schedule version: ${s.static_version}.` : "";
+    if (s.static_loaded && state.stations.length) refreshProfile();
     return s.static_loaded;
+  }
+
+  async function refreshProfile() {
+    let p;
+    try { p = await api("/api/settings"); } catch (e) { return; }
+    const wasOnLeg = onLeg();
+    const changed = JSON.stringify(p.leg) !== JSON.stringify(state.home.leg);
+    state.home = p;
+    if (changed && wasOnLeg && p.leg) goToLeg();  // follow the commute only if you were on it
+    else updateHomeUi();
   }
 
   // ---------- boot ----------
@@ -483,10 +609,11 @@
     try {
       state.home = await api("/api/settings");
     } catch (e) { console.warn(e); }
-    if (state.home.home_station && state.stationById.has(state.home.home_station)) {
-      // Every device opens on the home station.
-      state.station = state.home.home_station;
-      state.dest = state.home.home_dest || null;
+    const leg = state.home.leg;
+    if (leg && state.stationById.has(leg.from)) {
+      // Every device opens on the commute leg for right now (or home).
+      state.station = leg.from;
+      state.dest = leg.to || null;
     }
     if (state.dest && !state.stationById.has(state.dest)) state.dest = null;
     toPicker.sync();

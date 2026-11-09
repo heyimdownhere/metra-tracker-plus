@@ -299,9 +299,10 @@ def test_user_settings_roundtrip(tmp_path):
     from app.user_settings import UserSettings
 
     us = UserSettings(tmp_path / "cfg" / "settings.json")
-    assert us.load() == {"home_station": None, "home_dest": None}
+    empty = {"home_station": None, "home_dest": None, "work_station": None, "switch_time": None, "work_days": None}
+    assert us.load() == empty
     us.update({"home_station": "A", "home_dest": "C", "junk": 1})
-    assert UserSettings(tmp_path / "cfg" / "settings.json").load() == {"home_station": "A", "home_dest": "C"}
+    assert UserSettings(tmp_path / "cfg" / "settings.json").load() == {**empty, "home_station": "A", "home_dest": "C"}
     us.update({"home_dest": None})
     assert us.load()["home_dest"] is None
 
@@ -622,3 +623,76 @@ def test_board_history_needs_enough_days_and_matching_day_type(tracker, tmp_path
         hist.time.time = real
     assert rows["t-0800"]["history"] is None
     assert {(x["day_type"], x["observations"]) for x in stats} == {("weekday", 3), ("saturday", 5)}
+
+
+# ---- environment settings and the home/work commute -----------------------
+
+def test_env_settings_parsing_and_warnings(tmp_path, monkeypatch):
+    from app.config import load_settings
+    secret = tmp_path / "token"
+    secret.write_text("abcd1234wxyz\n")
+    for k, v in {"METRA_API_TOKEN": "", "METRA_API_TOKEN_FILE": str(secret), "PORT": "9090", "HOST": "127.0.0.1",
+                 "REALTIME_INTERVAL": "5", "HISTORY_DAYS": "abc", "LOG_LEVEL": "loud",
+                 "WORK_DAYS": "mon,wed", "COMMUTE_SWITCH_TIME": "13:30", "HOME_STATION": "Evanston"}.items():
+        monkeypatch.setenv(k, v)
+    s = load_settings()
+    assert s.api_token == "abcd1234wxyz" and s.port == 9090 and s.host == "127.0.0.1"
+    assert s.realtime_interval == 30            # clamped to Metra's minimum
+    assert s.history_days == 365 and s.log_level == "INFO"
+    assert s.work_days == (0, 2) and s.commute_switch_time == "13:30" and s.home_station == "Evanston"
+    assert len(s.warnings) == 3                 # interval, history days, log level
+    summary = s.summary()
+    assert "abcd1234wxyz" not in summary and "…wxyz" in summary
+    monkeypatch.setenv("METRA_API_TOKEN", "direct-token-value")   # the variable wins over the file
+    assert load_settings().api_token == "direct-token-value"
+
+
+def _app_with_fixture(tracker, tmp_path, monkeypatch, **env):
+    import importlib
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path / "cfg"))
+    monkeypatch.setenv("METRA_API_TOKEN", "")
+    for k, v in env.items():
+        monkeypatch.setenv(k, v)
+    import app.main as main
+    main = importlib.reload(main)
+    main.tracker.static = tracker.static          # skip the download: use the fixture schedule
+    return main, TestClient(main.app)
+
+
+def test_commute_leg_switches_by_time_and_day(tracker, tmp_path, monkeypatch):
+    main, c = _app_with_fixture(tracker, tmp_path, monkeypatch)
+    assert c.put("/api/settings", json={"home_station": "A", "work_station": "B", "switch_time": "12:00"}).status_code == 200
+    at = lambda d, h, m: datetime(2026, 11, d, h, m, tzinfo=TZ).timestamp()
+    assert main.profile(at(9, 7, 30))["leg"] == {"leg": "to_work", "from": "A", "to": "B"}     # Monday morning
+    assert main.profile(at(9, 17, 0))["leg"] == {"leg": "to_home", "from": "B", "to": "A"}     # Monday evening
+    assert main.profile(at(14, 7, 30))["leg"] == {"leg": "home", "from": "A", "to": None}      # Saturday
+    c.put("/api/settings", json={"work_days": "mon-sat", "switch_time": "6:45"})
+    p = main.profile(at(14, 7, 30))
+    assert p["work_days"] == [0, 1, 2, 3, 4, 5] and p["switch_time"] == "06:45"
+    assert p["leg"]["leg"] == "to_home"                                                         # after 6:45 now
+    # Validation
+    assert c.put("/api/settings", json={"work_station": "NOPE"}).status_code == 400
+    assert c.put("/api/settings", json={"switch_time": "noon"}).status_code == 400
+    assert c.put("/api/settings", json={"work_days": [9]}).status_code == 400
+
+
+def test_work_and_now_endpoints(tracker, tmp_path, monkeypatch):
+    main, c = _app_with_fixture(tracker, tmp_path, monkeypatch)
+    assert c.get("/api/work").status_code == 404                 # nothing set yet
+    c.put("/api/settings", json={"home_station": "A", "work_station": "B"})
+    w = c.get("/api/work").json()
+    assert w["station"]["id"] == "B" and w["to"]["id"] == "A"
+    n = c.get("/api/now").json()
+    assert n["leg"] in ("to_work", "to_home", "home") and n["station"]["id"] in ("A", "B")
+
+
+def test_home_and_work_fall_back_to_env(tracker, tmp_path, monkeypatch):
+    main, c = _app_with_fixture(tracker, tmp_path, monkeypatch,
+                                HOME_STATION="alpha", WORK_STATION="Bravo", WORK_DAYS="mon-fri", COMMUTE_SWITCH_TIME="11:00")
+    p = c.get("/api/settings").json()
+    assert (p["home_station"], p["source"], p["work_station"], p["work_source"]) == ("A", "env", "B", "env")
+    assert p["switch_time"] == "11:00" and p["work_days"] == [0, 1, 2, 3, 4]
+    c.put("/api/settings", json={"work_station": "C"})          # the app overrides the env value
+    p = c.get("/api/settings").json()
+    assert (p["work_station"], p["work_source"]) == ("C", "app") and p["home_station"] == "A"

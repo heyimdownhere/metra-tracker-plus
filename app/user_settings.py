@@ -7,7 +7,14 @@ import os
 import threading
 from pathlib import Path
 
-DEFAULTS = {"home_station": None, "home_dest": None}
+# None means "not set here": fall back to the environment (HOME_STATION etc.).
+DEFAULTS = {
+    "home_station": None,
+    "home_dest": None,
+    "work_station": None,
+    "switch_time": None,  # "HH:MM": before it the app shows home -> work, after it work -> home
+    "work_days": None,    # list of weekdays, Monday = 0
+}
 
 
 class UserSettings:

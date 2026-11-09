@@ -4,6 +4,11 @@
 #    (the "id" field, e.g. NAPERVILLE, CUS = Chicago Union Station, OTC = Ogilvie).
 # 2. Replace FROM/TO below and notify.mobile_app_YOUR_PHONE with your phone's notify service.
 # 3. Paste into configuration.yaml (or a package file) and restart Home Assistant.
+#
+# Tip: if you've set home and work in the app (briefcase button) or via
+# HOME_STATION / WORK_STATION, http://SERVER-IP:8080/api/now returns the
+# right trip for the time of day (home -> work in the morning, work -> home
+# after the switch time) without hard-coding stations here.
 
 rest:
   - resource: "http://SERVER-IP:8080/api/commute?from=NAPERVILLE&to=CUS&limit=3"

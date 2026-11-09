@@ -116,6 +116,7 @@ button { font: inherit; color: inherit; }
 .picker-field { min-width: 0; }
 .picker-label-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
 .picker-label-row .picker-label { margin-bottom: 0; }
+.pick-actions { display: flex; gap: 6px; }
 .home-btn {
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); font-size: 12px; font-weight: 600;
@@ -274,3 +275,59 @@ button { font: inherit; color: inherit; }
 .maplibregl-ctrl-attrib-inner, .maplibregl-ctrl-attrib-inner * { color: var(--muted); }
 .maplibregl-ctrl-attrib-inner a { color: var(--accent); }
 .dep .final b, .dep .arrive b, .dep s.was { white-space: nowrap; }
+
+/* ---- commute settings sheet ---- */
+dialog.sheet {
+  width: min(440px, calc(100vw - 24px)); max-height: calc(100vh - 40px); padding: 0; border: 1px solid var(--border);
+  border-radius: 14px; background: var(--panel); color: var(--text); box-shadow: var(--shadow);
+}
+dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
+#commute-form { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 12px; }
+#commute-form h2 { margin: 0; font-size: 18px; }
+#commute-form p { margin: 0; }
+#commute-form label { display: flex; flex-direction: column; gap: 5px; font-size: 13px; font-weight: 600; }
+#commute-form .hint { font-weight: 500; color: var(--muted); font-size: 11px; }
+#commute-form select, #commute-form input[type=time] {
+  padding: 9px 10px; border-radius: 9px; border: 1px solid var(--border); background: var(--panel-2); color: var(--text); font: inherit; font-size: 15px;
+}
+#commute-form fieldset { border: 0; padding: 0; margin: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+#commute-form legend { font-size: 13px; font-weight: 600; margin-bottom: 6px; padding: 0; }
+#commute-form label.day { flex-direction: row; }
+#commute-form label.day input { position: absolute; opacity: 0; pointer-events: none; }
+#commute-form label.day span {
+  padding: 6px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel-2); cursor: pointer; font-weight: 600;
+}
+#commute-form label.day input:checked + span { background: color-mix(in srgb, var(--accent) 25%, var(--panel-2)); border-color: var(--accent); color: var(--text); }
+#commute-form label.day input:focus-visible + span { outline: 2px solid var(--accent); }
+#commute-form .btns { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+#commute-form .btns button { padding: 9px 16px; border-radius: 9px; border: 1px solid var(--border); background: var(--panel-2); cursor: pointer; font-weight: 600; }
+#commute-form .btns .primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* ---- commute panel: pickers ---- */
+#commute-form .field { display: flex; flex-direction: column; gap: 6px; border: 0; padding: 0; margin: 0; min-width: 0; }
+#commute-form .field-label { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; font-size: 13px; font-weight: 600; padding: 0; }
+#commute-form .optional { font-weight: 500; color: var(--muted); }
+#commute-form .picker-box input {
+  width: 100%; padding: 10px 12px; font-size: 16px; color: var(--text);
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: 9px; outline: none;
+}
+#commute-form .picker-box input:focus { border-color: var(--accent); }
+/* In the dialog the list pushes content down instead of overlapping (no clipping). */
+#commute-form .station-list { position: static; margin-top: 4px; max-height: 38vh; box-shadow: none; }
+#cm-work-fields { display: flex; flex-direction: column; gap: 12px; }
+#cm-work-fields[hidden] { display: none; }
+.time-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.chips-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip-btn {
+  padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel-2);
+  cursor: pointer; font-size: 12px; font-weight: 600;
+}
+.chip-btn.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 25%, var(--panel-2)); }
+#commute-form .days { display: flex; flex-wrap: wrap; gap: 6px; }
+.setup-card {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px;
+  border: 1px dashed var(--accent); border-radius: 10px; background: color-mix(in srgb, var(--accent) 8%, var(--panel-2));
+}
+.setup-card button.primary, #commute-form .btns .primary {
+  padding: 8px 14px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-weight: 700; cursor: pointer;
+}
