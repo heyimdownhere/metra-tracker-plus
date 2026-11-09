@@ -116,12 +116,33 @@ Change the station IDs, the time, and `notify.mobile_app_YOUR_PHONE`.
 
 ## API
 
+All endpoints read the server's in-memory copy of Metra's data. **No request to this app ever triggers a request to Metra.** A single background job polls Metra's realtime feeds, and the poll function itself refuses to run more than once every 30 seconds, whatever calls it. A test checks this, and a live run of ~8,000 API requests in 70 s produced exactly 3 polls of each feed. The schedule is checked every 5 minutes.
+
+Which way a train is going (`inbound`/`outbound`) is decided by geography: a train is inbound if its last stop is closer to the Loop than your station. It doesn't depend on Metra's IDs or direction codes.
+
+Example: `curl "http://SERVER-IP:8080/api/next?station=EVANSTON&direction=inbound"`
+
+```json
+{
+  "station": {"id": "EVANSTON", "name": "Evanston (Davis St.)"},
+  "direction": "inbound",
+  "next_minutes": 50,
+  "message": "Evanston (Davis St.) toward downtown: 11:20 AM to Chicago OTC (on time), ...",
+  "trains": [
+    {"departure": "2026-11-09T11:20:00-06:00", "minutes_until": 50, "status": "on time",
+     "line": "UP-N", "train": "330", "destination": "Chicago OTC",
+     "final_arrival": "2026-11-09T11:50:00-06:00", "live": true, "...": "..."}
+  ]
+}
+```
+
 | Endpoint | Description |
 |---|---|
 | `GET /healthz` | Health check. Returns 200 once the schedule is loaded, otherwise 503. |
 | `GET /api/status` | Mode, feed health, schedule version, history stats. |
 | `GET /api/stations` | Stations with the lines that serve them. |
-| `GET /api/departures?station=ID&limit=5[&to=ID]` | Departure board; with `to`, only trains that later stop there. Each row includes `final_stop` and `final_arrival` (estimated arrival at the end of the line). |
+| `GET /api/next?station=EVANSTON&direction=inbound` | **Next 5 trains** at a station. `direction`: `inbound`/`to` = toward downtown, `outbound`/`from` = away from downtown, omit for both. `station` takes an id or a name (`Evanston (Davis St.)`). Optional `limit` (1–20). Returns ISO times, minutes until, status, line, train number, destination, estimated arrival at the final stop, and a ready-made `message`. |
+| `GET /api/departures?station=ID&limit=5[&to=ID][&direction=inbound]` | Departure board; with `to`, only trains that later stop there. Each row includes `final_stop` and `final_arrival` (estimated arrival at the end of the line). |
 | `GET /api/settings` / `PUT /api/settings` | Shared settings: `{"home_station": "EVANSTON", "home_dest": null}`. |
 | `GET /api/home?limit=5` | Departure board for the saved home station (also handy for Home Assistant or a wall display). |
 | `GET /api/trains` | Train positions (live, or estimated from the schedule). |

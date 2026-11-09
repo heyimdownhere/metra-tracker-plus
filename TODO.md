@@ -57,6 +57,7 @@ Map tiles were blocked in the dev sandbox, so none of these have been seen actua
 - [x] Search by line name ("upn" lists all UP-N stations) and an optional **Going to** destination, with arrival times and trip length (done 2026-11-09).
 - [x] Fixed: the swap (⇅) button overlapped the From field's clear (×) button.
 - [x] **Home station** (saved on the server, shared by all devices) and **estimated arrival at each train's final station** (done 2026-11-09).
+- [x] `/api/next?station=…&direction=inbound|outbound`: next 5 trains to or from downtown. Verified that API traffic never triggers extra Metra polls (30 s limit enforced in code).
 - [ ] Idea: a full-screen "wall display" mode (`/?kiosk`) showing only the home board in large type, for a tablet by the door.
 
 - [ ] **History UI:** history is API-only right now. Ideas: an "on time 85% (30 days)" note on each departure, or a small history page with charts.

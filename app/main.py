@@ -19,7 +19,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_settings
-from .tracker import Tracker
+from .tracker import Tracker, normalize_direction
 from .user_settings import UserSettings
 
 logging.basicConfig(
@@ -79,11 +79,16 @@ def departures(
     station: str = Query(..., min_length=1),
     limit: int = Query(5, ge=1, le=20),
     to: str | None = Query(None, description="Only trains that later stop at this station"),
+    direction: str | None = Query(None, description="inbound/to or outbound/from downtown"),
 ):
     if tracker.static is None:
         raise HTTPException(503, "Schedule not loaded yet")
     try:
-        return _json(tracker.departures(station, limit, to=to or None))
+        d = normalize_direction(direction)
+    except ValueError:
+        raise HTTPException(400, "direction must be inbound/to or outbound/from (or omitted for both)")
+    try:
+        return _json(tracker.departures(station, limit, to=to or None, direction=d))
     except KeyError as exc:
         raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
 
@@ -96,6 +101,27 @@ def trains():
 @app.get("/api/alerts")
 def alerts():
     return _json(tracker.alerts())
+
+
+@app.get("/api/next")
+def next_trains(
+    station: str = Query(..., min_length=1, description="Station id (e.g. EVANSTON) or name"),
+    direction: str | None = Query(
+        None, description="inbound/to (toward downtown), outbound/from (away from downtown); omit for both"
+    ),
+    limit: int = Query(5, ge=1, le=20),
+):
+    """Next trains at a station, optionally only toward or away from downtown."""
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    try:
+        d = normalize_direction(direction)
+    except ValueError:
+        raise HTTPException(400, "direction must be inbound/to or outbound/from (or omitted for both)")
+    try:
+        return _json(tracker.next_trains(station, d, limit))
+    except KeyError:
+        raise HTTPException(404, f"Unknown station {station!r}. See /api/stations for ids.")
 
 
 @app.get("/api/settings")

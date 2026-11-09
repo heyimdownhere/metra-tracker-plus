@@ -17,6 +17,7 @@ from . import realtime as rtp
 from .config import Settings
 from .history import History
 from .static_gtfs import (
+    _dist_m,
     S_DEP, S_SEQ, S_STOP, S_ARR,
     T_DIRECTION, T_ROUTE, T_SERVICE, T_SHAPE, T_SHORT_NAME,
     StaticCache, StaticData, parse_gtfs_zip,
@@ -26,6 +27,29 @@ log = logging.getLogger(__name__)
 
 USER_AGENT = "metra-tracker-plus/1.0 (self-hosted)"
 
+# Downtown Chicago (the Loop). Metra's downtown terminals (Union Station,
+# Ogilvie, LaSalle St., Millennium) are all within ~1.5 km of this point.
+LOOP = (41.8819, -87.6278)
+
+DIRECTION_ALIASES = {
+    "inbound": "inbound", "in": "inbound", "to": "inbound", "to_downtown": "inbound", "downtown": "inbound",
+    "outbound": "outbound", "out": "outbound", "from": "outbound", "from_downtown": "outbound",
+}
+
+
+def normalize_direction(value: str | None) -> str | None:
+    """'inbound' (toward downtown), 'outbound', or None for both. Raises ValueError."""
+    if value is None or value.strip() == "" or value.strip().lower() in ("both", "any", "all"):
+        return None
+    key = value.strip().lower().replace("-", "_").replace(" ", "_")
+    if key not in DIRECTION_ALIASES:
+        raise ValueError(value)
+    return DIRECTION_ALIASES[key]
+
+
+def _norm_name(x: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", x.lower())
+
 DELAY_EFFECTS = {"SIGNIFICANT_DELAYS", "REDUCED_SERVICE", "NO_SERVICE", "DETOUR", "MODIFIED_SERVICE"}
 NON_DELAY_EFFECTS = {"ACCESSIBILITY_ISSUE", "STOP_MOVED", "NO_EFFECT", "ADDITIONAL_SERVICE"}
 DELAY_WORDS = re.compile(
@@ -33,6 +57,20 @@ DELAY_WORDS = re.compile(
     r"mechanical|signal (problem|issue)s?|police|pedestrian|trespasser|freight|weather)\b",
     re.IGNORECASE,
 )
+
+
+def _status(r: dict) -> tuple[int | None, str]:
+    """(delay in minutes, human status) for a departure row."""
+    delay_min = round(r["delay"] / 60) if r["delay"] is not None else None
+    if r["cancelled"]:
+        return delay_min, "cancelled"
+    if not r["live"]:
+        return delay_min, "scheduled"
+    if delay_min and delay_min >= 1:
+        return delay_min, f"{delay_min} min late"
+    if delay_min and delay_min <= -1:
+        return delay_min, f"{-delay_min} min early"
+    return delay_min, "on time"
 
 
 def _is_delay_alert(a: rtp.AlertInfo) -> bool:
@@ -70,6 +108,10 @@ class Tracker:
         self._client: httpx.AsyncClient | None = None
         self._static_lock = asyncio.Lock()
         self._trains_cache: tuple[float, dict] | None = None
+        # Monotonic time of the last realtime poll. Metra allows at most one
+        # request per feed every 30 seconds; refresh_realtime enforces it.
+        self._last_rt_poll: float | None = None
+        self.rt_polls = 0
 
     # ---- lifecycle -------------------------------------------------------
     async def start(self) -> None:
@@ -191,7 +233,19 @@ class Tracker:
         st.feed_timestamp = msg.header.timestamp or None
         return msg
 
-    async def refresh_realtime(self) -> None:
+    async def refresh_realtime(self) -> bool:
+        """Poll Metra's three realtime feeds once. Returns False if skipped.
+
+        This is the only place realtime requests are made, and it refuses to run
+        more often than REALTIME_INTERVAL (minimum 30 s), whoever calls it.
+        Web/API requests never trigger a poll; they read the cached snapshot.
+        """
+        mono = time.monotonic()
+        if self._last_rt_poll is not None and mono - self._last_rt_poll < self.settings.realtime_interval:
+            log.debug("Skipping realtime poll: last one was %.0fs ago", mono - self._last_rt_poll)
+            return False
+        self._last_rt_poll = mono
+        self.rt_polls += 1
         positions, updates, alerts = await asyncio.gather(
             *(self._fetch_feed(f) for f in rtp.FEEDS)
         )
@@ -211,6 +265,7 @@ class Tracker:
                     await asyncio.to_thread(self.history.record_alerts, self.rt.alerts)
             except Exception:
                 log.exception("Recording history failed")
+        return True
 
     def _observation_rows(self, now: float) -> list[tuple]:
         """Current predictions for every upcoming stop of every realtime trip."""
@@ -409,6 +464,41 @@ class Tracker:
         out.sort(key=lambda x: x["name"].lower())
         return out
 
+    def _loop_dist(self, stop_id: str | None) -> float | None:
+        stop = self.static.stops.get(stop_id or "")
+        if not stop:
+            return None
+        return _dist_m(stop["lat"], stop["lon"], *LOOP)
+
+    def _direction(self, from_stop: str, final_stop: str | None) -> str | None:
+        """'inbound' if the train ends closer to downtown than where you board.
+
+        Uses geography rather than GTFS direction_id or IDs, so it keeps working
+        if Metra renumbers things.
+        """
+        here, there = self._loop_dist(from_stop), self._loop_dist(final_stop)
+        if here is None or there is None:
+            return None
+        return "inbound" if there < here else "outbound"
+
+    def find_station(self, query: str) -> str:
+        """Resolve a station id or name (case/punctuation-insensitive) to its id."""
+        s = self.static
+        if query in s.station_children:
+            return query
+        q = _norm_name(query)
+        stations = list(s.station_children)
+        for sid in stations:
+            if _norm_name(sid) == q:
+                return sid
+        for sid in stations:
+            if _norm_name(s.stops[sid]["name"]) == q:
+                return sid
+        matches = [sid for sid in stations if q and _norm_name(s.stops[sid]["name"]).startswith(q)]
+        if len(matches) == 1:
+            return matches[0]
+        raise KeyError(query)
+
     def _station_stops(self, station_id: str) -> list[str]:
         s = self.static
         stop_ids = s.station_children.get(station_id)
@@ -450,7 +540,8 @@ class Tracker:
                     yield trip_id, stop_id, seq, base, sched, effective, pred
 
     def departures(
-        self, station_id: str, limit: int = 5, now: float | None = None, to: str | None = None
+        self, station_id: str, limit: int = 5, now: float | None = None, to: str | None = None,
+        direction: str | None = None,
     ) -> dict:
         """Next departures from a station; with `to`, only trains that later stop there."""
         s = self.static
@@ -466,6 +557,8 @@ class Tracker:
         rows = []
         for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(stop_ids, now):
             row = self._row(trip_id, stop_id, sched, effective, pred, base)
+            if direction and row["direction"] != direction:
+                continue
             if dest is not None:
                 arrival = next((x for x in s.trip_stops[trip_id] if x[S_SEQ] > seq and x[S_STOP] in dest), None)
                 if arrival is None:
@@ -480,13 +573,17 @@ class Tracker:
                 )
             rows.append(row)
         if dest is None:
-            rows.extend(self._added_departures(set(stop_ids), now))
+            rows.extend(
+                r for r in self._added_departures(set(stop_ids), now)
+                if not direction or r["direction"] == direction
+            )
         rows.sort(key=lambda r: r["time"])
         station = s.stops.get(station_id)
         dest_stop = s.stops.get(to) if to else None
         return {
             "station": {"id": station_id, "name": station["name"] if station else station_id},
             "to": {"id": to, "name": dest_stop["name"] if dest_stop else to} if to else None,
+            "direction": direction,
             "departures": rows[:limit],
             "generated_at": now,
             "realtime": self.realtime_live,
@@ -524,15 +621,7 @@ class Tracker:
 
         trips, parts = [], []
         for r in rows:
-            delay_min = round(r["delay"] / 60) if r["delay"] is not None else None
-            if r["cancelled"]:
-                status = "cancelled"
-            elif not r["live"]:
-                status = "scheduled"
-            elif delay_min and delay_min >= 1:
-                status = f"{delay_min} min late"
-            else:
-                status = "on time"
+            delay_min, status = _status(r)
             trips.append({
                 "departure": iso(r["time"]),
                 "departure_scheduled": iso(r["scheduled"]),
@@ -572,6 +661,56 @@ class Tracker:
             "generated_at": iso(now),
         }
 
+    def next_trains(self, station: str, direction: str | None = None, limit: int = 5,
+                    now: float | None = None) -> dict:
+        """Simple API: next trains at a station, optionally only to/from downtown."""
+        s = self.static
+        now = time.time() if now is None else now
+        station_id = self.find_station(station)
+        board = self.departures(station_id, limit, now=now, direction=direction)
+        tz = s.tz
+
+        def iso(t):
+            return datetime.fromtimestamp(t, tz).isoformat(timespec="seconds") if t else None
+
+        trains, parts = [], []
+        for r in board["departures"]:
+            delay_min, status = _status(r)
+            trains.append({
+                "departure": iso(r["time"]),
+                "departure_scheduled": iso(r["scheduled"]),
+                "minutes_until": max(0, round((r["time"] - now) / 60)),
+                "status": status,
+                "delay_min": delay_min,
+                "live": r["live"],
+                "cancelled": r["cancelled"],
+                "direction": r["direction"],
+                "line": r["route_short"],
+                "line_name": r["route_name"],
+                "train": r["train"],
+                "destination": r["destination"],
+                "final_stop": r["final_stop"],
+                "final_arrival": iso(r["final_arrival"]),
+                "final_arrival_scheduled": iso(r["final_arrival_scheduled"]),
+                "track": r["track"],
+                "delay_reason": r["delay_reason"],
+            })
+            when = datetime.fromtimestamp(r["scheduled"] if r["cancelled"] and r["scheduled"] else r["time"], tz)
+            parts.append(f"{when.strftime('%-I:%M %p')} to {r['destination']} ({status})")
+
+        name = board["station"]["name"]
+        label = {"inbound": " toward downtown", "outbound": " away from downtown"}.get(direction or "", "")
+        return {
+            "station": board["station"],
+            "direction": direction or "both",
+            "trains": trains,
+            "next_departure": trains[0]["departure"] if trains else None,
+            "next_minutes": trains[0]["minutes_until"] if trains else None,
+            "message": (f"{name}{label}: " + ", ".join(parts)) if parts else f"No upcoming trains at {name}{label}.",
+            "realtime": board["realtime"],
+            "generated_at": iso(now),
+        }
+
     def _final_arrival(self, trip_id: str, base: float, pred: dict | None) -> tuple[str | None, float | None, float | None]:
         """(final stop name, estimated arrival, scheduled arrival) for a trip."""
         s = self.static
@@ -600,7 +739,9 @@ class Tracker:
         final_stop, final_arrival, final_sched = (
             self._final_arrival(trip_id, base, pred) if base is not None else (None, None, None)
         )
+        last_stop = s.trip_stops[trip_id][-1][S_STOP] if s.trip_stops.get(trip_id) else None
         return {
+            "direction": self._direction(stop_id, last_stop),
             "final_stop": final_stop,
             "final_arrival": final_arrival,
             "final_arrival_scheduled": final_sched,
@@ -662,6 +803,7 @@ class Tracker:
                     "cancelled": False,
                     "track": self._track(stu.assigned_stop_id),
                     "delay_reason": None,
+                    "direction": self._direction(stu.stop_id, last),
                     "final_stop": s.stop_name(last),
                     "final_arrival": float(tu.stop_updates[-1].arrival_time or tu.stop_updates[-1].departure_time or 0) or None,
                     "final_arrival_scheduled": None,

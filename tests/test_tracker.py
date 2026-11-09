@@ -304,3 +304,64 @@ def test_user_settings_roundtrip(tmp_path):
     assert UserSettings(tmp_path / "cfg" / "settings.json").load() == {"home_station": "A", "home_dest": "C"}
     us.update({"home_dest": None})
     assert us.load()["home_dest"] is None
+
+
+def test_direction_flag_to_or_from_downtown(tracker):
+    # Fixture stops: Alpha (far west) -> Bravo -> Central (downtown Chicago).
+    tracker.settings = tracker.settings.__class__(**{**tracker.settings.__dict__, "api_token": None})
+    from app.tracker import normalize_direction
+
+    assert normalize_direction("to") == "inbound" and normalize_direction("From-Downtown") == "outbound"
+    assert normalize_direction(None) is None and normalize_direction("both") is None
+    with pytest.raises(ValueError):
+        normalize_direction("sideways")
+    rows = tracker.departures("A", limit=3, now=NOW, direction="inbound")["departures"]
+    assert len(rows) == 3 and all(r["direction"] == "inbound" for r in rows)
+    assert tracker.departures("A", now=NOW, direction="outbound")["departures"] == []
+    n = tracker.next_trains("alpha", "inbound", limit=2, now=NOW)  # name lookup, any case
+    assert n["station"]["id"] == "A" and n["direction"] == "inbound" and len(n["trains"]) == 2
+    assert n["trains"][0]["final_stop"] == "Central" and n["trains"][0]["minutes_until"] == 10
+    assert n["message"].startswith("Alpha toward downtown: 8:00 AM to Central (scheduled)")
+    with pytest.raises(KeyError):
+        tracker.next_trains("Nowhere", None, now=NOW)
+
+
+def test_realtime_polls_never_faster_than_30s(tracker, monkeypatch):
+    import asyncio
+
+    calls = []
+
+    async def fake_fetch(name):
+        calls.append(name)
+        return None
+
+    monkeypatch.setattr(tracker, "_fetch_feed", fake_fetch)
+    clock = [1000.0]
+    monkeypatch.setattr("app.tracker.time.monotonic", lambda: clock[0])
+
+    async def run():
+        assert await tracker.refresh_realtime() is True
+        for _ in range(20):  # hammering it does nothing until 30 s have passed
+            clock[0] += 1
+            assert await tracker.refresh_realtime() is False
+        clock[0] += 10  # now 30 s after the first poll
+        assert await tracker.refresh_realtime() is True
+
+    asyncio.run(run())
+    assert len(calls) == 6 and tracker.rt_polls == 2  # 3 feeds x 2 polls
+
+
+def test_api_requests_do_not_poll_metra(tracker, monkeypatch):
+    """Board, map, alerts and /api/next only read the cached snapshot."""
+    def boom(*a, **k):
+        raise AssertionError("an API read tried to contact Metra")
+
+    monkeypatch.setattr(tracker, "_fetch_feed", boom)
+    monkeypatch.setattr(tracker, "refresh_realtime", boom)
+    monkeypatch.setattr(tracker, "refresh_static", boom)
+    for _ in range(50):
+        tracker.departures("A", now=NOW)
+        tracker.next_trains("A", "inbound", now=NOW)
+        tracker.trains(NOW)
+        tracker.alerts(NOW)
+        tracker.commute("A", "C", now=NOW)
