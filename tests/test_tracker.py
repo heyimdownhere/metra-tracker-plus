@@ -448,3 +448,118 @@ def test_endpoints_return_503_not_500_before_schedule_loads(tmp_path, monkeypatc
         main.tracker.history._db = None
     assert c.get("/api/next?station=X").status_code == 503
     assert c.get("/api/next?station=X&direction=sideways").status_code in (400, 503)
+
+
+# ---- improvements from the logic review --------------------------------------
+
+def _vehicle(eid, trip_id, lat, lon, ts):
+    e = pb.FeedEntity(id=eid)
+    e.vehicle.trip.trip_id = trip_id
+    e.vehicle.position.latitude, e.vehicle.position.longitude = lat, lon
+    e.vehicle.vehicle.id, e.vehicle.vehicle.label = "car" + eid, "9" + eid
+    e.vehicle.timestamp = int(ts)
+    return e
+
+
+def test_gps_tracking_estimates_delay_without_trip_update(tracker):
+    # t-0800 should leave Bravo (-88.00) at 8:10. At 8:16 its GPS puts it at Bravo
+    # -> about 6 min late. Metra sent no trip update for it.
+    _apply(tracker, [])
+    at = datetime(2026, 11, 9, 8, 16, tzinfo=TZ).timestamp()
+    tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.90, -88.00, at)))
+    tracker._gps = tracker._gps_estimates(at)
+    est = tracker._gps["t-0800"]
+    assert est["delay"] == 360 and est["at_station"] and est["next_stop"] == "Bravo"
+    r = next(r for r in tracker.departures("B", now=at)["departures"] if r["trip_id"] == "t-0800")
+    assert r["tracking"] and not r["live"] and r["delay"] == 360
+    assert r["time"] - r["scheduled"] == 360
+    train = tracker._live_trains(at)[0]
+    assert train["tracking"] and train["delay"] == 360 and train["next_stop"] == "Bravo"
+    from app.tracker import _status
+    assert _status(r)[1] == "about 6 min late"
+
+
+def test_gps_point_far_from_route_is_ignored(tracker):
+    _apply(tracker, [])
+    at = datetime(2026, 11, 9, 8, 5, tzinfo=TZ).timestamp()
+    assert tracker._gps_estimate("t-0800", 41.50, -88.05, at) is None  # ~45 km off
+
+
+def test_stale_vehicle_positions_are_dropped(tracker):
+    _apply(tracker, [])
+    at = datetime(2026, 11, 9, 8, 5, tzinfo=TZ).timestamp()
+    tracker.rt.vehicles = rtp.parse_positions(_feed(
+        _vehicle("1", "t-0800", 41.90, -88.05, at - 30),
+        _vehicle("2", "t-0830", 41.90, -88.10, at - 600),  # silent for 10 min
+    ))
+    assert [t["trip_id"] for t in tracker._live_trains(at)] == ["t-0800"]
+
+
+def test_never_shows_a_departure_before_schedule(tracker):
+    _apply(tracker, [_tu("t-0800", [("A", -240)])])  # running 4 min early
+    rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
+    assert rows["t-0800"]["time"] == rows["t-0800"]["scheduled"] and rows["t-0800"]["delay"] == 0
+
+
+def test_feed_with_old_header_timestamp_is_not_live(tracker):
+    _apply(tracker, [_tu("t-0800", [("A", 300)])])
+    assert tracker.realtime_live
+    tracker.rt.status["tripupdates"].feed_timestamp = int(time.time()) - 600  # 10-min-old snapshot
+    assert not tracker.realtime_live
+    assert tracker.status()["realtime_age"] >= 600
+
+
+def test_station_names_cleaned_and_duplicates_labelled(tracker):
+    from app.static_gtfs import clean_name
+    assert clean_name("Lake Forest.") == "Lake Forest"
+    assert clean_name("Main St.") == "Main St." and clean_name("Western Ave.") == "Western Ave."
+    s = tracker.static
+    s.stops["A2"] = {**s.stops["A"], "id": "A2"}
+    s.station_children["A2"] = ["A2"]
+    s.stop_departures["A2"] = [(8 * 3600, "u-0815", 1)]
+    s.version = "v2"  # labels are cached per schedule version
+    names = {x["id"]: x["name"] for x in tracker.stations()}
+    assert names["A"] == "Alpha (L1/L2)" and names["A2"] == "Alpha (L2)"
+    assert tracker.find_station("Alpha (L2)") == "A2"
+
+
+def test_responses_are_gzipped(tmp_path, monkeypatch):
+    monkeypatch.setenv("CONFIG_DIR", str(tmp_path))
+    import importlib
+    from fastapi.testclient import TestClient
+
+    import app.main as main
+    main = importlib.reload(main)
+    r = TestClient(main.app).get("/vendor/maplibre/maplibre-gl.js", headers={"Accept-Encoding": "gzip"})
+    assert r.status_code == 200 and r.headers.get("content-encoding") == "gzip"
+
+
+def test_finished_trips_are_not_tracked_or_shown(tracker):
+    """Metra keeps tagging parked/deadheading trains with their old trip for hours."""
+    _apply(tracker, [])
+    at = datetime(2026, 11, 9, 9, 30, tzinfo=TZ).timestamp()  # t-0800 ended 8:40
+    tracker.rt.vehicles = rtp.parse_positions(_feed(
+        _vehicle("1", "t-0800", 41.88, -87.64, at),   # parked at Central (its last stop)
+        _vehicle("2", "u-0815", 41.90, -88.05, at),   # mid-route, but 35 min past its 8:55 finish
+    ))
+    tracker._gps = tracker._gps_estimates(at)
+    assert tracker._gps["t-0800"]["finished"]
+    assert not tracker._gps["u-0815"].get("finished")  # within 45 min: maybe just very late
+    assert [t["trip_id"] for t in tracker._live_trains(at)] == ["u-0815"]
+    later = at + 20 * 60  # 55 min past finish
+    tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("2", "u-0815", 41.90, -88.05, later)))
+    tracker._gps = tracker._gps_estimates(later)
+    assert tracker._live_trains(later) == []
+
+
+def test_long_finished_trip_hidden_even_when_off_the_line(tracker):
+    _apply(tracker, [])
+    at = datetime(2026, 11, 9, 11, 0, tzinfo=TZ).timestamp()  # t-0800 ended 8:40
+    tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.70, -87.90, at)))  # in a yard, far off
+    tracker._gps = tracker._gps_estimates(at)
+    assert tracker._gps["t-0800"]["finished"] and tracker._live_trains(at) == []
+
+
+def test_train_arriving_at_terminal_shows_it_as_next_stop(tracker):
+    at = datetime(2026, 11, 9, 8, 41, tzinfo=TZ).timestamp()  # t-0800 due at Central 8:40
+    assert tracker._next_stop_delay("t-0800", at) == (None, "Central")

@@ -35,7 +35,6 @@ class StopUpdate:
     departure_time: int | None
     departure_delay: int | None
     relationship: int
-    assigned_stop_id: str | None
 
 
 @dataclass
@@ -97,9 +96,27 @@ class RealtimeSnapshot:
     alerts: list[AlertInfo] = field(default_factory=list)
     status: dict[str, FeedStatus] = field(default_factory=lambda: {f: FeedStatus() for f in FEEDS})
 
-    def fresh(self, feed: str, max_age: float = 300) -> bool:
+    def data_age(self, feed: str, now: float | None = None) -> float | None:
+        """Seconds since the feed's data was generated (its header timestamp),
+        falling back to when we last fetched it. None if never fetched."""
         st = self.status.get(feed)
-        return bool(st and st.last_success and time.time() - st.last_success < max_age)
+        if not st or not st.last_success:
+            return None
+        now = time.time() if now is None else now
+        ref = st.feed_timestamp or st.last_success
+        return max(0.0, now - ref)
+
+    def fresh(self, feed: str, max_age: float = 300, max_data_age: float = 180) -> bool:
+        """Recently fetched AND the data itself is recent.
+
+        A 200 response can still carry an old snapshot, so the feed header's
+        timestamp is checked too, not just whether the request succeeded.
+        """
+        st = self.status.get(feed)
+        if not (st and st.last_success and time.time() - st.last_success < max_age):
+            return False
+        age = self.data_age(feed)
+        return age is None or age <= max_data_age
 
 
 def _opt(msg, name):
@@ -174,7 +191,6 @@ def parse_trip_updates(msg: rt.FeedMessage) -> list[TripUpdateInfo]:
         for stu in tu.stop_time_update:
             arr = stu.arrival if stu.HasField("arrival") else None
             dep = stu.departure if stu.HasField("departure") else None
-            props = stu.stop_time_properties if stu.HasField("stop_time_properties") else None
             stus.append(
                 StopUpdate(
                     stop_sequence=_opt(stu, "stop_sequence"),
@@ -184,7 +200,6 @@ def parse_trip_updates(msg: rt.FeedMessage) -> list[TripUpdateInfo]:
                     departure_time=(_opt(dep, "time") or None) if dep else None,
                     departure_delay=_opt(dep, "delay") if dep else None,
                     relationship=stu.schedule_relationship,
-                    assigned_stop_id=(_opt(props, "assigned_stop_id") if props else None),
                 )
             )
         vd = tu.vehicle if tu.HasField("vehicle") else None

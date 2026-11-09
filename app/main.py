@@ -16,6 +16,7 @@ from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from .config import load_settings
@@ -41,6 +42,9 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Metra Tracker Plus", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
+# Compress JSON and the JS/CSS bundles (the map library alone is ~1 MB): keeps
+# phone data use down.
+app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
 
 NO_STORE = {"Cache-Control": "no-store"}
 

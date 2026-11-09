@@ -284,7 +284,7 @@
     }
     function styleTrainEl(el, t) {
       const rot = t.bearing == null ? null : `${t.bearing}deg`;
-      el.innerHTML = `<div class="train-dot${t.live ? "" : " est"}${t.delay >= 300 ? " late" : ""}" style="--c:${t.color}">${rot ? `<span class="arrow" style="--rot:${rot}"></span>` : ""}</div>`;
+      el.innerHTML = `<div class="train-dot${t.live ? "" : " est"}${t.delay >= 360 ? " late" : ""}" style="--c:${t.color}">${rot ? `<span class="arrow" style="--rot:${rot}"></span>` : ""}</div>`;
     }
 
     function updateTrains(data) {

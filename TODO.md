@@ -19,6 +19,8 @@ Map tiles were blocked in the dev sandbox, so these have never been seen drawing
 - [ ] Basemaps: Auto/Dark/Light/Streets (CARTO), Satellite (Esri), railway-tracks overlay (OpenRailwayMap).
 - [ ] 3D buildings (OpenFreeMap) in the Loop, in dark and light mode, and phone performance with them on.
 - [ ] Estimated train positions (schedule-only mode) sit on the lines, especially the ME and RI branches.
+- [ ] Refresh the README screenshots once the map tiles show (current ones have a blank map background).
+- [ ] Check the first GitHub Actions run (Actions tab) and, if you want to pull instead of build, the published `ghcr.io` image.
 
 Over the first days of real use:
 
@@ -32,36 +34,28 @@ Over the first days of real use:
 - [ ] Add `docs/home-assistant.yaml` to the HA repo (`(private Home Assistant repo)`) as a package; check how `configuration.yaml` is organized first.
 - [ ] Set the time and weekdays; maybe add an evening reverse commute. Run it manually once to test.
 
-## 4. Review suggestions (2026-11-09)
+## 4. Review suggestions: done 2026-11-09
 
-From a full read-through of the logic, ranked by value. **Not implemented yet.**
+All implemented, tested (34 tests) and checked on live Metra data:
 
-### High value
+- [x] Gzip compression: map library 1.06 MB → 276 KB, train list 16 KB → 2.8 KB per refresh.
+- [x] No polling while the app is hidden or the phone is locked (0 requests in 65 s hidden; refreshes on return).
+- [x] Stale positions (no update for 3+ min) dropped from the map.
+- [x] "Live" checks the age of Metra's data, not just that the request worked; the pill shows "Live · N min old".
+- [x] Alerts banner only features alerts for your lines; the rest sit behind "N on other lines".
+- [x] **Tracking** badge with a GPS-based delay estimate for trains Metra tracks but sends no prediction for. Live data showed most such "trains" were actually **parked or running empty after their trip ended**. Those are now hidden from the map: 41 → 28 trains, all real.
+- [x] Next stop always shown (GPS-based when needed; the terminal when arriving).
+- [x] Countdowns corrected to the server's clock.
+- [x] Amber for 1–5 min late, red for 6+ (Metra's on-time rule).
+- [x] Departures never shown before their scheduled time (arrival estimates still can be early).
+- [x] Track code and UI removed (Metra doesn't send tracks).
+- [x] Station names cleaned ("Lake Forest." → "Lake Forest") and duplicates labelled: "Lake Forest (MD-N)" / "Lake Forest (UP-N)", "Prairie Crossing (MD-N)" / "(NCS)".
+- [x] Per-trip prediction lookups cached; lookback for very late trains extended from 2 h to 4 h.
+- [x] `/api/status` reports `realtime_age`; `/healthz` still ignores realtime on purpose, so Metra outages don't restart the container.
+- [x] GitHub Actions: tests on every push; Docker image published to GHCR on `main` (optional for Unraid; see README).
+- [x] App icon (PWA, iPhone home screen, Unraid template). History backup documented in the README.
 
-- [ ] **Compress responses (gzip).** Nothing is compressed today. Measured sizes: the map library is 1.06 MB, `/api/lines` 168 KB, `/api/trains` 17 KB every 30 s. With FastAPI's `GZipMiddleware` (one line) these shrink roughly 4–5×. This fits the project's goal of low phone data usage. *Effort: tiny.*
-- [ ] **Stop polling when the app is in the background.** The page keeps fetching trains, the board and alerts every 30 s even when the tab is hidden or the phone is locked (only resuming on focus is handled). With the screen open that's about 3 MB/hour uncompressed; it should pause when hidden. *Effort: small.*
-- [ ] **Hide stale train positions.** A vehicle that stops reporting stays on the map at its last spot for up to 5 minutes, and individual `vehicle.timestamp`s aren't checked; positions up to ~6 min old were seen. Drop positions older than ~3 min, or fade them. *Effort: small.*
-- [ ] **Detect stale-but-"successful" feeds.** "Live" only means the last request returned HTTP 200. If Metra serves an old snapshot (old `header.timestamp`) the app still says Live. Treat a feed as stale when its header timestamp is more than ~3 min old, and show "Live data 4 min old" in the pill. *Effort: small.*
-- [ ] **Alerts banner shows alerts for every line.** Right now it shows things like "ME Harvey elevator out" to a UP-N rider, as "+11 more". Show only alerts for your station's or home station's lines in the banner, with the rest behind "N other alerts". *Effort: small.*
-
-### Medium value
-
-- [ ] **Trains being tracked but with no prediction.** Metra sends GPS for ~45 trains but trip updates for only ~32. Those ~13 show "Scheduled" on the board even though they're visibly moving. Show them as "Tracking" (no delay). Even better, estimate the delay from the GPS position against the schedule. *Effort: medium.*
-- [ ] **No next stop for very late trains.** If the timetable says a trip has already ended and Metra sent no trip update, the popup shows no next stop. Work it out from the GPS position: the nearest stop ahead along the line. *Effort: medium.*
-- [ ] **Phone clock vs server clock.** "Minutes until" uses the phone's clock. A phone a couple of minutes off shows wrong countdowns. Use the server's `generated_at` to correct for the difference. *Effort: tiny.*
-- [ ] **Delay colors.** Even 1 min late shows in red. Metra counts trains as on time if they're under 6 minutes late; use amber for 1–5 min and red for 6+. *Effort: tiny.*
-- [ ] **Early departures.** With only arrival predictions (all Metra sends), a train running early is shown leaving early. Metra trains generally don't leave a station before their scheduled time, so consider showing departure as max(prediction, schedule). Check against real behavior first. *Effort: tiny.*
-- [ ] **Track numbers never appear.** Metra doesn't send them. Remove the track code and UI, or keep it dormant and document why. *Effort: tiny.*
-- [ ] **Station name quirks.** Metra's data has "Lake Forest." (trailing period) and two separate "Lake Forest" stations. Clean up names for display, and add the line to ambiguous names in the picker, e.g. "Lake Forest (UP-N)". *Effort: tiny.*
-
-### Lower value / housekeeping
-
-- [ ] **Prediction cost.** `_predict` rebuilds per-trip lookup tables on every call, and history recording calls it for every stop of every live trip each poll. Fine at Metra's size (~1 ms) but easy to cache per trip per poll.
-- [ ] **Delays over 2 hours.** Trains more than 2 hours late drop off the board (lookback window). Rare; could extend the window.
-- [ ] **Health check ignores realtime.** `/healthz` is healthy as soon as the schedule loads, even if realtime has failed for hours. Keep it that way so Docker doesn't restart for Metra outages, but add realtime age to `/api/status` for monitoring.
-- [ ] **GitHub Actions** to run `pytest` on every push; optionally publish the image to GHCR so Unraid can pull instead of build.
-- [ ] Unraid template icon; refresh README screenshots once map tiles show.
-- [ ] Back up `history.db` (about 1 GB/year) with the Unraid appdata backup plugin.
+Still to check: the **Tracking** estimate itself hasn't been seen on a real in-service train yet, because every in-service train had a Metra prediction during testing. Watch for the "Tracking" badge and compare it with reality.
 
 ## 5. Ideas
 

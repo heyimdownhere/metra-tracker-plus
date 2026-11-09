@@ -23,7 +23,7 @@ from zoneinfo import ZoneInfo
 
 log = logging.getLogger(__name__)
 
-CACHE_VERSION = 3
+CACHE_VERSION = 4  # bump when StaticData's fields change
 
 # Trip tuple field indexes.
 T_ROUTE, T_SERVICE, T_HEADSIGN, T_SHAPE, T_DIRECTION, T_SHORT_NAME = range(6)
@@ -74,6 +74,20 @@ def _read_csv(zf: zipfile.ZipFile, name: str) -> list[dict[str, str]]:
         return rows
 
 
+# Abbreviations whose trailing period is part of the name ("Main St.").
+_ABBREVIATIONS = {"st", "ave", "av", "rd", "blvd", "pk", "jct", "hts", "mt", "ft", "sq", "ctr", "dr", "ln", "pl", "n", "s", "e", "w"}
+
+
+def clean_name(name: str) -> str:
+    """Tidy a stop name for display: 'Lake Forest.' -> 'Lake Forest', keep 'Main St.'."""
+    name = " ".join(name.split())
+    if name.endswith(".") and not name.endswith(".."):
+        last = name[:-1].rsplit(" ", 1)[-1].strip("(").lower()
+        if last not in _ABBREVIATIONS and len(last) > 2:
+            name = name[:-1]
+    return name
+
+
 def _int(value: str | None, default: int = 0) -> int:
     try:
         return int(value) if value not in (None, "") else default
@@ -108,6 +122,16 @@ class StaticData:
     station_children: dict[str, list[str]]  # station id -> stop ids with service
     _services_cache: dict[date, frozenset] = field(default_factory=dict, repr=False)
     _stop_dist_cache: dict[tuple, list[float] | None] = field(default_factory=dict, repr=False)
+    _trip_index_cache: dict[str, tuple] = field(default_factory=dict, repr=False)
+
+    def trip_index(self, trip_id: str) -> tuple[dict[str, int], dict[int, tuple]]:
+        """(stop_id -> stop_sequence, stop_sequence -> stop tuple) for a trip, cached."""
+        idx = self._trip_index_cache.get(trip_id)
+        if idx is None:
+            sts = self.trip_stops.get(trip_id, [])
+            idx = ({x[S_STOP]: x[S_SEQ] for x in sts}, {x[S_SEQ]: x for x in sts})
+            self._trip_index_cache[trip_id] = idx
+        return idx
 
     # ---- time helpers -------------------------------------------------
     @property
@@ -311,7 +335,7 @@ def parse_gtfs_zip(path: Path, version: str) -> StaticData:
             continue
         stops[sid] = {
             "id": sid,
-            "name": s.get("stop_name") or sid,
+            "name": clean_name(s.get("stop_name") or sid),
             "lat": lat,
             "lon": lon,
             "parent": s.get("parent_station") or None,

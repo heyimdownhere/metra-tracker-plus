@@ -31,9 +31,16 @@ It's light on your phone's data: your home server talks to Metra, and your phone
   - Right-drag (or two-finger drag on a phone) to tilt and rotate.
 - **Home station**: tap **⌂ Set as home** next to "From" (optionally with a "Going to" station). Home is saved on the server (`/config/settings.json`), so every phone, tablet and computer opens straight to it. A **Home** button brings you back after looking at other stations.
 - **Departure board**: searchable station picker (search by station or line, e.g. "upn") that remembers your last choice, plus an optional **Going to** station that shows only trains to that stop, with arrival time and trip length. Each train also shows its **estimated arrival at its final station** (e.g. "Est. at Kenosha 11:46 AM"), using live delays when Metra has them.
-- The board shows the next 5 departures with time, minutes until, destination, line, track (when Metra provides it) and a **Live** or **Scheduled** badge. Realtime predictions override the schedule and fall back to it when missing. Cancelled trains are struck through.
+- The board shows the next 5 departures with time, minutes until, destination, line, train number and a badge:
+  - **Live**: Metra's own prediction.
+  - **Tracking**: Metra reports the train's GPS position but sent no prediction, so the delay is estimated from where the train is compared with the timetable (shown as "~3 min late").
+  - **Scheduled**: no live data; timetable time.
+
+  Delays of 1–5 min are amber and 6+ min red (Metra counts under 6 minutes as on time). Departures are never shown earlier than scheduled, because Metra trains don't leave a station early. Cancelled trains are struck through. Metra doesn't publish track numbers, so none are shown.
+- **Stale and out-of-service trains are hidden**: positions that stop updating for 3+ minutes, and trains Metra still tags with a trip that has ended (parked at the terminal or running empty to a yard).
+- **"Live" means fresh**: the status pill checks the age of Metra's data itself, not just that the request worked, and shows "Live · 4 min old" when Metra falls behind.
 - **Delay reasons**: for a late or cancelled train, the app looks for an active alert naming that trip, or else one for the train's line. It shows the alert's cause (e.g. "Weather"), or the alert's text if the cause is unknown.
-- **Service alerts** banner. Alerts for your station's lines are listed first.
+- **Service alerts** banner, featuring only alerts for the lines you use (current, destination and home stations). Alerts for other lines sit behind a quiet "N on other lines".
 - **Long-term history** in SQLite (`/config/history.db`): every realtime prediction, cancellation and alert, kept for `HISTORY_DAYS` (default 365). You can query on-time stats per departure or export the data as CSV.
 - **Home Assistant** commute API for morning notifications (see below).
 - Works on phones, has dark and light modes, and can be installed as a PWA.
@@ -78,11 +85,26 @@ The image is built locally on the server; there is no registry image.
 
 **Updating:** `cd /mnt/user/appdata/metra-tracker-plus-src && git pull && docker build -t metra-tracker-plus:latest .`, then restart the container. The cached schedule and history in `/config` are kept.
 
+### Alternative: pull the published image instead of building
+
+On every push to `main`, GitHub Actions runs the tests and publishes `ghcr.io/heyimdownhere/metra-tracker-plus:latest`. To use it, set **Repository** in the Unraid template to `ghcr.io/heyimdownhere/metra-tracker-plus:latest`; Unraid's "check for updates" then works normally. If the GitHub repo is private, the package is private too: either make the package public (GitHub → your profile → Packages → metra-tracker-plus → Package settings), or `docker login ghcr.io` on the server with a token that has `read:packages`.
+
+### Backing up history
+
+`/config/history.db` holds your delay history (about 1 GB a year at the default 365 days). The **Appdata Backup** plugin (Community Applications) backs up `/mnt/user/appdata/metra-tracker` along with your other containers. It stops the container while copying, so the SQLite file is consistent. `/config/gtfs/` is only a cache and doesn't need backing up.
+
 ### docker compose (alternative)
 
 ```sh
 METRA_API_TOKEN=yourkey docker compose up -d --build
 ```
+
+## Phone data use
+
+The server does all the talking to Metra; your phone only downloads small summaries from the server:
+- Responses are gzip-compressed. The map library is about 276 KB on first load (cached afterwards), and the train list about 3 KB every 30 s.
+- The app stops refreshing when it's in the background or the phone is locked, and refreshes straight away when you come back.
+- Map tiles are the largest download. The 3D buildings layer uses the most; turn it off in map settings if data matters.
 
 ## Configuration
 
@@ -100,7 +122,7 @@ A weekday has about 11,500 train-stop events, so history grows by roughly 3 MB a
 
 ## Home Assistant: morning train notification
 
-`GET /api/commute?from=<station>&to=<station>&limit=3` returns the next trains that stop at `from` and later at `to`. Each train includes departure and arrival (predicted and scheduled), minutes until, trip duration, status (`on time`, `5 min late`, `cancelled`, `scheduled`), track, delay reason, and a ready-to-send `message`, for example:
+`GET /api/commute?from=<station>&to=<station>&limit=3` returns the next trains that stop at `from` and later at `to`. Each train includes departure and arrival (predicted and scheduled), minutes until, trip duration, status (`on time`, `5 min late`, `about 3 min late` for GPS estimates, `cancelled`, `scheduled`), delay reason, and a ready-to-send `message`, for example:
 
 > Naperville → Chicago Union Station: 7:12 AM (on time), 7:30 AM (8 min late: Weather), 7:45 AM (scheduled)
 

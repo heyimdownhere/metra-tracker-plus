@@ -24,8 +24,14 @@
   async function api(path) {
     const r = await fetch(path, { cache: "no-store" });
     if (!r.ok) throw new Error(`${path}: HTTP ${r.status}`);
-    return r.json();
+    const data = await r.json();
+    // Countdowns use the server's clock, not the phone's (which may be off).
+    if (data && typeof data.generated_at === "number") {
+      state.clockOffset = data.generated_at - Date.now() / 1000;
+    }
+    return data;
   }
+  const serverNow = () => Date.now() / 1000 + (state.clockOffset || 0);
 
   // ---------- formatting ----------
   let timeFmt = null;
@@ -39,10 +45,14 @@
     const m = t.match(/^(.*?)\s*([AaPp]\.?\s?[Mm]\.?)$/);
     return m ? `${esc(m[1])}<span class="ampm">${esc(m[2])}</span>` : esc(t);
   }
-  function delayHtml(delay) {
+  // Metra counts a train as on time if it's less than 6 minutes late:
+  // amber for 1-5 min, red from 6.
+  function delayHtml(delay, approx) {
     if (delay == null) return "";
     const m = Math.round(delay / 60);
-    if (m >= 1) return `<span class="delay late">${m} min late</span>`;
+    const pre = approx ? "~" : "";
+    if (m >= 6) return `<span class="delay late">${pre}${m} min late</span>`;
+    if (m >= 1) return `<span class="delay minor">${pre}${m} min late</span>`;
     if (m <= -1) return `<span class="delay early">${-m} min early</span>`;
     return `<span class="delay ontime">On time</span>`;
   }
@@ -50,7 +60,7 @@
     return `<span class="chip" style="background:${esc(color)};color:${esc(text)}">${esc(short)}</span>`;
   }
   function ago(epoch) {
-    const s = Math.max(0, Math.round(Date.now() / 1000 - epoch));
+    const s = Math.max(0, Math.round(serverNow() - epoch));
     return s < 60 ? `${s}s ago` : `${Math.round(s / 60)} min ago`;
   }
 
@@ -70,7 +80,10 @@
     if (t.train) rows.push(["Train", esc(t.train)]);
     rows.push(["To", esc(t.destination || "—")]);
     rows.push([t.stopped ? "At" : "Next", esc(t.next_stop || "—")]);
-    rows.push(["Status", t.live ? (delayHtml(t.delay) || "Live") : '<span class="muted">Estimated from schedule</span>']);
+    const status = !t.live ? '<span class="muted">Estimated from schedule</span>'
+      : t.tracking ? `${delayHtml(t.delay, true) || "On time"} <span class="muted">(from GPS)</span>`
+      : (delayHtml(t.delay) || "Live");
+    rows.push(["Status", status]);
     if (t.delay_reason) rows.push(["Reason", esc(t.delay_reason)]);
     if (t.timestamp) rows.push(["Updated", ago(t.timestamp)]);
     return `<div class="popup"><h3>${title}</h3><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl></div>`;
@@ -214,6 +227,7 @@
     fromPicker.sync();
     $("board-title").textContent = st.name;
     updateHomeUi();
+    renderAlerts();
     if (opts.pan !== false) mapView.flyTo(st.lat, st.lon);
     refreshDepartures();
   }
@@ -223,6 +237,7 @@
     if (state.dest) localStorage.setItem(DEST_KEY, state.dest); else localStorage.removeItem(DEST_KEY);
     toPicker.sync();
     updateHomeUi();
+    renderAlerts();
     if (opts.refresh !== false) refreshDepartures();
   }
 
@@ -312,7 +327,7 @@
   function renderBoard() {
     const d = state.departures;
     if (!d) return;
-    const now = Date.now() / 1000;
+    const now = serverNow();
     const from = d.station ? d.station.name : "";
     $("board-title").innerHTML = esc(d.to ? `${from} → ${d.to.name}` : from) + (isHome() ? '<span class="home-tag">HOME</span>' : "");
     $("board-updated").textContent = `Updated ${fmtTime(d.generated_at)}`;
@@ -328,15 +343,15 @@
       const mins = Math.max(0, Math.round((r.time - now) / 60));
       const minsHtml = r.cancelled ? "<b>—</b>" : mins === 0 ? "<b>Now</b>" : `<b>${mins}</b><span>min</span>`;
       const changed = r.scheduled && Math.abs(r.time - r.scheduled) >= 60;
-      const badge = r.cancelled
-        ? '<span class="badge cancel">Cancelled</span>'
-        : r.live ? '<span class="badge live">Live</span>' : '<span class="badge sched">Scheduled</span>';
+      const badge = r.cancelled ? '<span class="badge cancel">Cancelled</span>'
+        : r.live ? '<span class="badge live">Live</span>'
+        : r.tracking ? '<span class="badge tracking" title="Metra sent no prediction for this train; delay estimated from its GPS position">Tracking</span>'
+        : '<span class="badge sched">Scheduled</span>';
       const meta = [
         chip(r.route_short, r.color, r.text_color),
         badge,
-        r.track ? `<span>Track ${esc(r.track)}</span>` : "",
         r.train ? `<span>#${esc(r.train)}</span>` : "",
-        r.live && !r.cancelled ? delayHtml(r.delay) : "",
+        (r.live || r.tracking) && !r.cancelled ? delayHtml(r.delay, r.tracking) : "",
       ].filter(Boolean).join("");
       return `<li class="dep${r.cancelled ? " cancelled" : ""}" style="--line:${esc(r.color)}">
         <div class="timecol"><div class="time">${bigTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
@@ -360,21 +375,45 @@
   async function refreshAlerts() {
     let alerts;
     try { alerts = await api("/api/alerts"); } catch (e) { console.warn(e); return; }
+    state.alerts = alerts;
+    renderAlerts();
+  }
+
+  // The banner only features alerts for lines you use (the selected station,
+  // its destination and your home station); everything else sits behind a
+  // quiet "N alerts on other lines".
+  function renderAlerts() {
+    const alerts = state.alerts || [];
     const box = $("alerts");
     if (!alerts.length) { box.hidden = true; return; }
-    // Alerts touching the selected station's lines first.
-    const st = state.stationById.get(state.station);
-    const mine = new Set(st ? st.routes : []);
-    alerts.sort((a, b) => (b.routes.some((r) => mine.has(r.id)) ? 1 : 0) - (a.routes.some((r) => mine.has(r.id)) ? 1 : 0));
-    box.hidden = false;
-    $("alerts-headline").textContent = alerts[0].header;
-    $("alerts-count").textContent = alerts.length > 1 ? `+${alerts.length - 1} more` : "Details";
-    $("alerts-list").innerHTML = alerts.map((a) => `<li>
+    const myLines = new Set();
+    for (const id of [state.station, state.dest, state.home.home_station, state.home.home_dest]) {
+      const st = state.stationById.get(id);
+      if (st) st.routes.forEach((r) => myLines.add(r));
+    }
+    const isMine = (a) => a.routes.some((r) => myLines.has(r.id));
+    const mine = alerts.filter(isMine);
+    const other = alerts.filter((a) => !isMine(a));
+    const item = (a) => `<li>
       <div>${a.routes.map((r) => chip(r.short_name, r.color, r.text_color)).join(" ")}</div>
       <h3>${esc(a.header)}</h3>
       ${a.description && a.description !== a.header ? `<p>${esc(a.description)}</p>` : ""}
       ${a.url ? `<p><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">More info</a></p>` : ""}
-    </li>`).join("");
+    </li>`;
+    box.hidden = false;
+    box.classList.toggle("quiet", !mine.length);
+    if (mine.length) {
+      $("alerts-headline").textContent = mine[0].header;
+      const extra = mine.length - 1;
+      $("alerts-count").textContent = extra > 0 ? `+${extra} more` + (other.length ? ` · ${other.length} other lines` : "")
+        : other.length ? `${other.length} on other lines` : "Details";
+    } else {
+      $("alerts-headline").textContent = `${other.length} alert${other.length === 1 ? "" : "s"} on other lines`;
+      $("alerts-count").textContent = "Show";
+    }
+    $("alerts-list").innerHTML = mine.map(item).join("")
+      + (other.length && mine.length ? '<li class="alerts-divider">Other lines</li>' : "")
+      + other.map(item).join("");
   }
 
   // ---------- status ----------
@@ -389,11 +428,17 @@
       pill.textContent = "Schedule only";
       pill.title = "No METRA_API_TOKEN configured; showing scheduled times.";
     } else if (s.realtime_live) {
-      pill.textContent = "Live";
+      const age = s.realtime_age;
       pill.classList.add("live");
-      pill.title = "Realtime data from Metra";
+      if (age != null && age >= 90) {
+        pill.textContent = `Live · ${Math.round(age / 60)} min old`;
+        pill.classList.add("warn");
+      } else {
+        pill.textContent = "Live";
+      }
+      pill.title = age != null ? `Realtime data from Metra, ${Math.round(age)}s old` : "Realtime data from Metra";
     } else {
-      pill.textContent = "Realtime unavailable";
+      pill.textContent = s.realtime_age != null ? `Realtime stale (${Math.round(s.realtime_age / 60)} min)` : "Realtime unavailable";
       pill.classList.add("warn");
       const errs = Object.entries(s.feeds || {}).filter(([, f]) => f.error).map(([n, f]) => `${n}: ${f.error}`);
       pill.title = errs.join("\n") || "Waiting for realtime data; showing schedule.";
@@ -432,15 +477,27 @@
     refreshTrains();
     refreshAlerts();
 
+    // Poll only while the app is on screen: a hidden tab or locked phone
+    // uses no data. Coming back refreshes immediately.
     const tick = () => { refreshTrains(); refreshDepartures(); refreshAlerts(); };
-    let timer = setInterval(tick, state.interval * 1000);
-    setInterval(renderBoard, 15000);  // keep "minutes until" current between polls
-    setInterval(refreshStatus, 60000);
+    let timers = [];
+    const start = () => {
+      timers.forEach(clearInterval);
+      timers = [
+        setInterval(tick, state.interval * 1000),
+        setInterval(renderBoard, 15000),  // keep "minutes until" current between polls
+        setInterval(refreshStatus, 60000),
+      ];
+    };
+    const stop = () => { timers.forEach(clearInterval); timers = []; };
+    start();
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
-        clearInterval(timer);
+        refreshStatus();
         tick();
-        timer = setInterval(tick, state.interval * 1000);
+        start();
+      } else {
+        stop();
       }
     });
   }

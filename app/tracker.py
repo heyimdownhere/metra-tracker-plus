@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import math
 import re
 import time
 from bisect import bisect_left
@@ -26,6 +27,18 @@ from .static_gtfs import (
 log = logging.getLogger(__name__)
 
 USER_AGENT = "metra-tracker-plus/1.0 (self-hosted)"
+
+# A vehicle position older than this is dropped from the map (it stopped reporting).
+STALE_VEHICLE_SECONDS = 180
+# How far back to look for departures, so very late trains still show.
+DEPARTURE_LOOKBACK_SECONDS = 4 * 3600
+# GPS delay estimates are only made when the train is this close to its route.
+GPS_MAX_OFF_ROUTE_M = 2000
+GPS_AT_STATION_M = 200
+# A train with no trip update this long after its scheduled finish is treated
+# as out of service (Metra keeps tagging parked/deadheading trains with their
+# last trip for hours).
+TRIP_OVER_AFTER_SECONDS = 45 * 60
 
 # Downtown Chicago (the Loop). Metra's downtown terminals (Union Station,
 # Ogilvie, LaSalle St., Millennium) are all within ~1.5 km of this point.
@@ -73,6 +86,8 @@ def _status(r: dict) -> tuple[int | None, str]:
     delay_min = round(r["delay"] / 60) if r["delay"] is not None else None
     if r["cancelled"]:
         return delay_min, "cancelled"
+    if r.get("tracking"):
+        return delay_min, (f"about {delay_min} min late" if delay_min and delay_min >= 1 else "on time (GPS)")
     if not r["live"]:
         return delay_min, "scheduled"
     if delay_min and delay_min >= 1:
@@ -120,6 +135,9 @@ class Tracker:
         # Monotonic time of the last realtime poll. Metra allows at most one
         # request per feed every 30 seconds; refresh_realtime enforces it.
         self._last_rt_poll: float | None = None
+        # trip_id -> GPS-based estimate for trains with a position but no trip update.
+        self._gps: dict[str, dict] = {}
+        self._labels: tuple[str | None, dict[str, str]] = (None, {})
         self.rt_polls = 0
 
     # ---- lifecycle -------------------------------------------------------
@@ -203,7 +221,9 @@ class Tracker:
             self.static = data
             self.static_error = None
             self._trains_cache = None
+            self._labels = (None, {})
             self._reindex_realtime()
+            self._gps = self._gps_estimates(time.time())
             return True
 
     # ---- realtime feed ---------------------------------------------------
@@ -268,6 +288,7 @@ class Tracker:
             self.rt.alerts = rtp.parse_alerts(alerts)
         self._trains_cache = None
         self._reindex_realtime()
+        self._gps = self._gps_estimates(time.time())
         if self.history.available:
             try:
                 rows = self._observation_rows(time.time()) if updates is not None else []
@@ -384,7 +405,7 @@ class Tracker:
         """Realtime prediction for a static trip at stop `seq`.
 
         Returns None when there's no usable realtime data (show schedule),
-        else {"time", "delay", "skipped", "cancelled", "track"}.
+        else {"time", "delay", "skipped", "cancelled"}.
         """
         static = self.static
         info = self._rt_by_trip.get(trip_id)
@@ -392,10 +413,8 @@ class Tracker:
             return None
         tu = info.update
         if tu.trip.relationship == rtp.TRIP_CANCELED:
-            return {"time": None, "delay": None, "skipped": False, "cancelled": True, "track": None}
-        sts = static.trip_stops.get(trip_id, [])
-        seq_by_stop = {s[S_STOP]: s[S_SEQ] for s in sts}
-        sched_by_seq = {s[S_SEQ]: s for s in sts}
+            return {"time": None, "delay": None, "skipped": False, "cancelled": True}
+        seq_by_stop, sched_by_seq = static.trip_index(trip_id)
 
         best: rtp.StopUpdate | None = None
         best_seq = None
@@ -413,21 +432,19 @@ class Tracker:
 
         if best is None:
             if tu.delay is not None:
-                return {"time": sched + tu.delay, "delay": tu.delay, "skipped": False, "cancelled": False, "track": None}
+                return {"time": sched + tu.delay, "delay": tu.delay, "skipped": False, "cancelled": False}
             return None
         if best.relationship == rtp.NO_DATA:
             return None
-        track = self._track(best.assigned_stop_id) if best_seq == seq else None
-
         if best_seq == seq:
             if best.relationship == rtp.SKIPPED:
-                return {"time": None, "delay": None, "skipped": True, "cancelled": False, "track": None}
+                return {"time": None, "delay": None, "skipped": True, "cancelled": False}
             t = best.departure_time or best.arrival_time
             if t:
-                return {"time": float(t), "delay": int(t - sched), "skipped": False, "cancelled": False, "track": track}
+                return {"time": float(t), "delay": int(t - sched), "skipped": False, "cancelled": False}
             d = best.departure_delay if best.departure_delay is not None else best.arrival_delay
             if d is not None:
-                return {"time": sched + d, "delay": d, "skipped": False, "cancelled": False, "track": track}
+                return {"time": sched + d, "delay": d, "skipped": False, "cancelled": False}
             return None
 
         # Propagate delay from the most recent upstream update.
@@ -442,15 +459,113 @@ class Tracker:
             delay = tu.delay
         if delay is None:
             return None
-        return {"time": sched + delay, "delay": delay, "skipped": False, "cancelled": False, "track": None}
+        return {"time": sched + delay, "delay": delay, "skipped": False, "cancelled": False}
 
-    def _track(self, stop_id: str | None) -> str | None:
-        if not stop_id or not self.static:
+    # ---- GPS-based estimates (trains Metra tracks but sends no prediction for) ----
+    def _gps_estimates(self, now: float) -> dict[str, dict]:
+        s = self.static
+        if not s or not self.settings.realtime_enabled:
+            return {}
+        out = {}
+        for v in self.rt.vehicles:
+            if v.trip is None or (v.timestamp and now - v.timestamp > STALE_VEHICLE_SECONDS):
+                continue
+            trip_id = s.resolve_trip(v.trip.trip_id, v.trip.route_id, v.trip.start_time,
+                                     v.trip.start_date, v.trip.direction_id)
+            if not trip_id or trip_id in self._rt_by_trip:
+                continue  # Metra's own prediction wins
+            est = self._gps_estimate(trip_id, v.lat, v.lon, float(v.timestamp or now))
+            if est:
+                out[trip_id] = est
+        return out
+
+    def _gps_estimate(self, trip_id: str, lat: float, lon: float, ts: float) -> dict | None:
+        """Delay and next stop from where the train is vs where the timetable says.
+
+        Projects the GPS point onto the straight segments between the trip's
+        stations, then interpolates the scheduled time at that point. Trains
+        rarely run early and GPS is noisy, so early readings count as on time.
+        """
+        s = self.static
+        d = s.trip_service_date(trip_id, ts)
+        sts = s.trip_stops.get(trip_id) or []
+        if d is None or len(sts) < 2:
             return None
-        stop = self.static.stops.get(stop_id)
-        if stop and stop.get("platform_code"):
-            return stop["platform_code"]
-        return None
+        base = s.service_day_start(d)
+        if ts > base + sts[-1][S_ARR] + TRIP_OVER_AFTER_SECONDS:
+            # Long past the scheduled finish (often parked in a yard off the
+            # line): the trip is over, wherever the train is now.
+            return {"finished": True, "service_date": d}
+        coslat = math.cos(math.radians(lat))
+
+        def xy(stop):
+            return ((stop["lon"] - lon) * 111320 * coslat, (stop["lat"] - lat) * 110540)
+
+        best = None  # (distance_m, index, fraction)
+        for i in range(len(sts) - 1):
+            a, b = s.stops.get(sts[i][S_STOP]), s.stops.get(sts[i + 1][S_STOP])
+            if not a or not b:
+                continue
+            (ax, ay), (bx, by) = xy(a), xy(b)
+            dx, dy = bx - ax, by - ay
+            seg2 = dx * dx + dy * dy
+            f = 0.0 if seg2 == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / seg2))
+            dist = math.hypot(ax + f * dx, ay + f * dy)
+            if best is None or dist < best[0]:
+                best = (dist, i, f)
+        if best is None or best[0] > GPS_MAX_OFF_ROUTE_M:
+            return None
+        _, i, f = best
+        a, b = sts[i], sts[i + 1]
+        # Standing at (or pulling into) a station: compare against its departure.
+        at_station = None
+        for j in (i, i + 1):
+            stop = s.stops.get(sts[j][S_STOP])
+            if stop and math.hypot(*xy(stop)) <= GPS_AT_STATION_M:
+                at_station = j
+                break
+        if at_station == len(sts) - 1:
+            return {"finished": True, "service_date": d}  # parked at the end of the line
+        if at_station is not None:
+            sched_here, next_i = base + sts[at_station][S_DEP], at_station
+        else:
+            sched_here, next_i = base + a[S_DEP] + f * (b[S_ARR] - a[S_DEP]), i + 1
+        delay = max(0, int(ts - sched_here))
+        return {
+            "delay": delay,
+            "next_seq": sts[next_i][S_SEQ],
+            "next_stop": s.stop_name(sts[next_i][S_STOP]),
+            "at_station": at_station is not None,
+            "service_date": d,
+        }
+
+    def _gps_pred(self, trip_id: str, d: date, seq: int, sched: float) -> dict | None:
+        """A prediction-shaped dict from a GPS estimate, for a stop the train hasn't passed."""
+        est = self._gps.get(trip_id)
+        if not est or est.get("finished") or est["service_date"] != d or seq < est["next_seq"]:
+            return None
+        return {"time": sched + est["delay"], "delay": est["delay"], "skipped": False,
+                "cancelled": False, "gps": True}
+
+    def station_label(self, station_id: str) -> str:
+        """Display name; stations sharing a name get their line(s), e.g. 'Lake Forest (UP-N)'."""
+        s = self.static
+        version, labels = self._labels
+        if version != s.version:
+            by_name: dict[str, list[str]] = {}
+            for sid in s.station_children:
+                by_name.setdefault(s.stops[sid]["name"], []).append(sid)
+            labels = {}
+            for name, sids in by_name.items():
+                for sid in sids:
+                    if len(sids) > 1:
+                        lines = sorted({s.trips[x[1]][T_ROUTE] for c in s.station_children[sid]
+                                        for x in s.stop_departures.get(c, [])})
+                        labels[sid] = f"{name} ({'/'.join(lines) or sid})"
+                    else:
+                        labels[sid] = name
+            self._labels = (s.version, labels)
+        return labels.get(station_id) or s.stop_name(station_id) or station_id
 
     def _rt_matches_date(self, trip_id: str, d: date) -> bool:
         info = self._rt_by_trip.get(trip_id)
@@ -467,7 +582,7 @@ class Tracker:
             routes = sorted({s.trips[d[1]][T_ROUTE] for c in children for d in s.stop_departures.get(c, [])})
             out.append({
                 "id": station_id,
-                "name": stop["name"],
+                "name": self.station_label(station_id),
                 "lat": stop["lat"],
                 "lon": stop["lon"],
                 "routes": routes,
@@ -502,6 +617,9 @@ class Tracker:
         for sid in stations:
             if _norm_name(sid) == q:
                 return sid
+        labelled = [sid for sid in stations if _norm_name(self.station_label(sid)) == q]
+        if len(labelled) == 1:
+            return labelled[0]
         exact = [sid for sid in stations if _norm_name(s.stops[sid]["name"]) == q]
         matches = exact or [sid for sid in stations if q and _norm_name(s.stops[sid]["name"]).startswith(q)]
         if len(matches) == 1:
@@ -510,7 +628,7 @@ class Tracker:
             # e.g. "Lake Forest" is two different stations (MD-N and UP-N).
             lines = {st["id"]: st["routes"] for st in self.stations()}
             raise AmbiguousStation(query, [
-                {"id": sid, "name": s.stops[sid]["name"], "lines": lines.get(sid, [])} for sid in sorted(matches)
+                {"id": sid, "name": self.station_label(sid), "lines": lines.get(sid, [])} for sid in sorted(matches)
             ])
         raise KeyError(query)
 
@@ -530,7 +648,7 @@ class Tracker:
     def _iter_departures(self, stop_ids: list[str], now: float):
         """Yield (trip_id, stop_id, seq, base, sched, effective, pred) for upcoming departures."""
         s = self.static
-        lookback = 2 * 3600  # catch delayed trains scheduled up to 2h ago
+        lookback = DEPARTURE_LOOKBACK_SECONDS  # catch very late trains
         seen: set[tuple[str, date]] = set()
         for d in s.candidate_service_dates(now):
             base = s.service_day_start(d)
@@ -551,8 +669,14 @@ class Tracker:
                     pred = None
                     if self.realtime_live and self._rt_matches_date(trip_id, d):
                         pred = self._predict(trip_id, seq, base)
+                    if pred is None and self._gps:
+                        pred = self._gps_pred(trip_id, d, seq, sched)
                     if pred and pred["skipped"]:
                         continue
+                    if pred and pred["time"] and pred["time"] < sched:
+                        # Metra trains don't leave a station before the timetable
+                        # says, even when running ahead (predictions are arrivals).
+                        pred = {**pred, "time": sched, "delay": 0}
                     effective = pred["time"] if pred and pred["time"] else sched
                     if effective < now - 30:
                         continue
@@ -626,8 +750,8 @@ class Tracker:
         station = s.stops.get(station_id)
         dest_stop = s.stops.get(to) if to else None
         return {
-            "station": {"id": station_id, "name": station["name"] if station else station_id},
-            "to": {"id": to, "name": dest_stop["name"] if dest_stop else to} if to else None,
+            "station": {"id": station_id, "name": self.station_label(station_id) if station else station_id},
+            "to": {"id": to, "name": self.station_label(to) if dest_stop else to} if to else None,
             "direction": direction,
             "departures": rows[:limit],
             "generated_at": now,
@@ -657,7 +781,7 @@ class Tracker:
             "final_stop": r.get("final_stop"),
             "final_arrival": self._iso(r.get("final_arrival")),
             "final_arrival_scheduled": self._iso(r.get("final_arrival_scheduled")),
-            "track": r["track"],
+            "tracking": r.get("tracking", False),
             "delay_reason": r["delay_reason"],
         }
         if "arrival" in r:
@@ -667,14 +791,12 @@ class Tracker:
         return out
 
     def _summary_part(self, r: dict, status: str, with_destination: bool) -> str:
-        """e.g. '7:30 AM to Chicago OTC (8 min late, track 2: Weather)'."""
+        """e.g. '7:30 AM to Chicago OTC (8 min late: Weather)'."""
         t = r["scheduled"] if r["cancelled"] and r["scheduled"] else r["time"]
         text = datetime.fromtimestamp(t, self.static.tz).strftime("%-I:%M %p")
         if with_destination and r["destination"]:
             text += f" to {r['destination']}"
         text += f" ({status}"
-        if r["track"]:
-            text += f", track {r['track']}"
         if r["delay_reason"]:
             text += f": {r['delay_reason']}"
         return text + ")"
@@ -688,7 +810,7 @@ class Tracker:
         parts = [self._summary_part(r, t["status"], with_destination=False)
                  for r, t in zip(board["departures"], trips)]
         nxt = next((t for t in trips if not t["cancelled"]), None)
-        from_name, to_name = s.stop_name(from_id), s.stop_name(to_id)
+        from_name, to_name = board["station"]["name"], board["to"]["name"]
         return {
             "from": {"id": from_id, "name": from_name},
             "to": {"id": to_id, "name": to_name},
@@ -749,7 +871,6 @@ class Tracker:
         s = self.static
         trip = s.trips[trip_id]
         route = s.routes.get(trip[T_ROUTE], {})
-        track = (pred or {}).get("track") or s.stops.get(stop_id, {}).get("platform_code")
         final_stop, final_arrival, final_sched = (
             self._final_arrival(trip_id, base, pred) if base is not None else (None, None, None)
         )
@@ -770,9 +891,9 @@ class Tracker:
             "scheduled": sched,
             "time": effective,
             "delay": (pred or {}).get("delay"),
-            "live": bool(pred and pred["time"]),
+            "live": bool(pred and pred["time"] and not pred.get("gps")),
+            "tracking": bool(pred and pred.get("gps")),
             "cancelled": bool(pred and pred["cancelled"]),
-            "track": track,
             "delay_reason": self._row_reason(trip_id, trip[T_ROUTE], pred),
         }
 
@@ -814,8 +935,8 @@ class Tracker:
                     "time": float(t),
                     "delay": None,
                     "live": True,
+                    "tracking": False,
                     "cancelled": False,
-                    "track": self._track(stu.assigned_stop_id),
                     "delay_reason": None,
                     "direction": self._direction(stu.stop_id, last),
                     "final_stop": s.stop_name(last),
@@ -827,7 +948,8 @@ class Tracker:
     def trains(self, now: float | None = None) -> dict:
         now = time.time() if now is None else now
         if self._trains_cache and now - self._trains_cache[0] < 10:
-            return self._trains_cache[1]
+            # Fresh timestamp: the app uses it to correct the phone's clock.
+            return {**self._trains_cache[1], "generated_at": now}
         if self.settings.realtime_enabled and self.rt.fresh("positions"):
             result = {"source": "realtime", "trains": self._live_trains(now)}
         else:
@@ -842,11 +964,18 @@ class Tracker:
         if d is None:
             return None, None
         base = s.service_day_start(d)
-        for st in s.trip_stops.get(trip_id, []):
+        sts = s.trip_stops.get(trip_id, [])
+        for st in sts:
             pred = self._predict(trip_id, st[S_SEQ], base)
             t = pred["time"] if pred and pred["time"] else base + st[S_DEP]
             if t >= now:
                 return (pred or {}).get("delay"), s.stop_name(st[S_STOP])
+        if sts:
+            # Just reaching the end of the line: show the terminal as next stop.
+            pred = self._predict(trip_id, sts[-1][S_SEQ], base)
+            t = pred["time"] if pred and pred["time"] else base + sts[-1][S_ARR]
+            if now - t < 15 * 60:
+                return (pred or {}).get("delay"), s.stop_name(sts[-1][S_STOP])
         return None, None
 
     def _live_trains(self, now: float) -> list[dict]:
@@ -858,14 +987,26 @@ class Tracker:
             # trip (yards, layovers); those aren't trains a rider cares about.
             if v.trip is None or not (v.trip.trip_id or v.trip.route_id):
                 continue
+            if v.timestamp and now - v.timestamp > STALE_VEHICLE_SECONDS:
+                continue  # stopped reporting; don't leave it frozen on the map
             trip_id = None
             if s and v.trip:
                 trip_id = s.resolve_trip(v.trip.trip_id, v.trip.route_id, v.trip.start_time, v.trip.start_date, v.trip.direction_id)
             route_id = (s.trips[trip_id][T_ROUTE] if trip_id else None) or (v.trip.route_id if v.trip else None)
             route = (s.routes.get(route_id or "", {}) if s else {})
-            delay, next_stop = (None, None)
-            if trip_id:
+            delay, next_stop, tracking = None, None, False
+            gps = self._gps.get(trip_id or "")
+            if gps and gps.get("finished"):
+                continue  # trip over: parked at the terminal or heading to a yard
+            if trip_id and trip_id in self._rt_by_trip:
                 delay, next_stop = self._next_stop_delay(trip_id, now)
+            elif gps:
+                # No prediction from Metra: use where the train actually is.
+                delay, next_stop, tracking = gps["delay"], gps["next_stop"], True
+            elif trip_id:
+                delay, next_stop = self._next_stop_delay(trip_id, now)
+            if next_stop is None and gps:
+                next_stop = gps["next_stop"]
             if v.stop_id and s and v.status is not None:
                 # VehicleStopStatus: 0 INCOMING_AT, 1 STOPPED_AT, 2 IN_TRANSIT_TO
                 next_stop = s.stop_name(v.stop_id)
@@ -888,8 +1029,9 @@ class Tracker:
                     if delay is not None and delay >= 60 else None
                 ),
                 "next_stop": next_stop,
-                "stopped": v.status == 1,
+                "stopped": v.status == 1 or bool(gps and gps["at_station"]),
                 "timestamp": v.timestamp,
+                "tracking": tracking,
                 "live": True,
             })
         return out
@@ -943,6 +1085,7 @@ class Tracker:
                     "next_stop": s.stop_name(next_stop),
                     "stopped": stopped,
                     "timestamp": None,
+                    "tracking": False,
                     "live": False,
                 })
         return out
@@ -1023,6 +1166,10 @@ class Tracker:
             "agency": s.agency_name if s else "Metra",
             "routes": list(s.routes.values()) if s else [],
             "realtime_interval": self.settings.realtime_interval,
+            "realtime_age": (
+                round(self.rt.data_age("tripupdates")) if self.rt.data_age("tripupdates") is not None else None
+            ) if self.settings.realtime_enabled else None,
+            "generated_at": time.time(),
             "history": self.history.stats(),
             "feeds": {
                 name: {
