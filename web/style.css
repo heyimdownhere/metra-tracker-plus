@@ -124,6 +124,7 @@ button { font: inherit; color: inherit; }
 .home-btn.go-home { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); border-color: var(--accent); }
 .dep .final { font-size: 12px; color: var(--muted); margin-top: 2px; }
 .dep .final b { color: var(--text); font-weight: 600; }
+.dep s.was { color: var(--muted); text-decoration: line-through; margin-right: 1px; }
 .home-tag { font-size: 11px; font-weight: 700; color: var(--accent); margin-left: 6px; vertical-align: middle; }
 .picker .optional { text-transform: none; letter-spacing: 0; opacity: .8; }
 .swap-btn {
@@ -257,3 +258,4 @@ button { font: inherit; color: inherit; }
 .map-settings .hint { color: var(--muted); font-size: 11px; margin: 10px 0 0; }
 .maplibregl-ctrl-attrib-inner, .maplibregl-ctrl-attrib-inner * { color: var(--muted); }
 .maplibregl-ctrl-attrib-inner a { color: var(--accent); }
+.dep .final b, .dep .arrive b, .dep s.was { white-space: nowrap; }

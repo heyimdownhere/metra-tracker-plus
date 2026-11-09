@@ -292,8 +292,15 @@
   function finalHtml(r, d) {
     if (!r.final_stop || !r.final_arrival || r.cancelled) return "";
     if (d.to && r.arrival && r.final_stop === d.to.name) return "";
-    const est = r.live ? "Est." : "Sched.";
-    return `<div class="final">${est} at ${esc(r.final_stop)} <b>${fmtTime(r.final_arrival)}</b></div>`;
+    return `<div class="final">Arrives ${esc(r.final_stop)} ${timeChange(r.final_arrival_scheduled, r.final_arrival)}</div>`;
+  }
+
+  // Like the departure time: if the estimate differs from the timetable,
+  // cross out the scheduled time and show the estimate next to it.
+  function timeChange(scheduled, estimate) {
+    const est = `<b>${fmtTime(estimate)}</b>`;
+    if (!scheduled || fmtTime(scheduled) === fmtTime(estimate)) return est;
+    return `<s class="was">${fmtTime(scheduled)}</s> ${est}`;
   }
 
   function renderBoard() {
@@ -329,7 +336,7 @@
         <div class="timecol"><div class="time">${fmtTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
         <div class="main"><div class="dest" title="${esc(r.destination)}">${esc(r.destination || r.route_name)}</div>
         <div class="meta">${meta}</div>
-        ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} <b>${fmtTime(r.arrival)}</b> · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
+        ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)} · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
         ${finalHtml(r, d)}
         ${r.delay_reason ? `<div class="reason" title="${esc(r.delay_reason)}">${esc(r.delay_reason)}</div>` : ""}</div>
         <div class="mins">${minsHtml}</div>
