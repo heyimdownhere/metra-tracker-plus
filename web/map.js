@@ -648,6 +648,7 @@
       setLines,
       setStations,
       updateTrains,
+      resize() { map.resize(); },
       selectTrip,
       clearSelection,
       refreshPopups,

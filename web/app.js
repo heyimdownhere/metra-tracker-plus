@@ -123,6 +123,7 @@
   }
   const narrow = () => matchMedia("(max-width: 820px)").matches;
   function pickBoardTrain(li) {
+    if (mapHidden()) return;
     const trip = li.dataset.trip;
     if (state.selectedTrip === trip) {  // tap again to unselect
       state.selectedTrip = null;
@@ -160,6 +161,7 @@
   });
 
   async function refreshTrains() {
+    if (mapHidden()) return;  // timetable only: no train positions needed
     let data;
     try { data = await api("/api/trains"); } catch (e) { console.warn(e); return; }
     mapView.updateTrains(data);
@@ -585,13 +587,20 @@
   }
 
   // ---------- display options (this device only) ----------
-  const view = { pickers: "show", alerts: "bell", alertLines: "all" };
+  const view = { pickers: "show", alerts: "bell", alertLines: "all", map: "show" };
   try { Object.assign(view, JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")); } catch (e) { /* ignore */ }
   // Earlier versions stored the line choice in "alerts".
   if (view.alerts === "all" || view.alerts === "mine") { view.alertLines = view.alerts; view.alerts = "bell"; }
   let pickersOpen = false;  // "Change" shows hidden pickers for a moment
 
+  const mapHidden = () => view.map === "hide";
   function applyView() {
+    const wasHidden = document.body.classList.contains("no-map");
+    document.body.classList.toggle("no-map", mapHidden());
+    if (wasHidden && !mapHidden()) {
+      // The map was hidden at size 0: fit it to its box again and catch up on trains.
+      requestAnimationFrame(() => { mapView.resize(); if (state.stations.length) refreshTrains(); });
+    }
     const show = view.pickers !== "hide" || pickersOpen;
     $("picker").hidden = !show;
     const btn = $("change-btn");
@@ -608,7 +617,7 @@
   });
 
   $("view-btn").addEventListener("click", () => {
-    for (const k of ["pickers", "alerts", "alertLines"]) {
+    for (const k of ["map", "pickers", "alerts", "alertLines"]) {
       document.querySelectorAll(`#view-form input[name=${k}]`).forEach((r) => { r.checked = r.value === view[k]; });
     }
     $("view-dialog").showModal();
