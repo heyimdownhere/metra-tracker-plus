@@ -87,6 +87,10 @@ button { font: inherit; color: inherit; }
 }
 .alerts-summary #alerts-headline { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .alerts-count { font-size: 12px; opacity: .85; white-space: nowrap; }
+.alerts-row { display: flex; align-items: center; }
+.alerts-row .alerts-summary { flex: 1; min-width: 0; padding-right: 4px; }
+.alerts-x { background: none; border: 0; color: inherit; cursor: pointer; font-size: 15px; padding: 10px 16px 10px 8px; opacity: .8; }
+.alerts-x:hover { opacity: 1; }
 .alerts-list { list-style: none; margin: 0; padding: 0 16px 12px; max-height: 40vh; overflow: auto; }
 .alerts-list li { padding: 10px 0; border-top: 1px solid rgba(168, 123, 18, .35); }
 .alerts-list h3 { font-size: 14px; margin: 4px 0; }
@@ -368,3 +372,20 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
 [data-theme="dark"] .commute-ctl svg { fill: #fff; }
 
 .map-settings .row.disabled { opacity: .45; }
+
+/* ---- display options sheet ---- */
+#view-form { padding: 16px 18px 18px; display: flex; flex-direction: column; gap: 14px; }
+#view-form h2 { margin: 0; font-size: 18px; }
+#view-form p { margin: 0; }
+.seg-field { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.seg-field legend { font-size: 13px; font-weight: 600; padding: 0; margin-bottom: 6px; }
+.seg-field .hint { font-size: 12px; color: var(--muted); }
+.seg { display: flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.seg label { flex: 1; position: relative; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg span { display: block; text-align: center; padding: 8px 6px; cursor: pointer; font-weight: 600; font-size: 14px; background: var(--panel-2); }
+.seg label + label span { border-left: 1px solid var(--border); }
+.seg input:checked + span { background: var(--accent); color: #fff; }
+.seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
+#view-form .btns { display: flex; justify-content: flex-end; }
+#view-form .btns .primary { padding: 9px 18px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-weight: 700; cursor: pointer; }

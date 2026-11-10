@@ -158,3 +158,19 @@ def test_download_over_http_ranges(world, tmp_path):
     assert bm.error is None and bm.available and not bm.needs_download()
     assert bm.status()["state"] == "ready" and bm.info()["source"] == "https://example.test/world.pmtiles"
     assert bm.tile(7, 32, 47) == (_payload(7, 32, 47), "gzip")
+
+
+def test_index_links_are_versioned_and_cached():
+    from fastapi.testclient import TestClient
+    from app.main import app
+    c = TestClient(app)
+    page = c.get("/")
+    assert page.headers["cache-control"] == "no-cache"
+    import re
+    links = re.findall(r'(?:src|href)="([^"]+\.(?:js|css)\?v=[0-9a-f]{10})"', page.text)
+    assert any(l.startswith("app.js?v=") for l in links) and any("maplibre-gl.js?v=" in l for l in links)
+    for link in links:
+        r = c.get("/" + link)
+        assert r.status_code == 200
+        assert "immutable" in r.headers["cache-control"]
+    assert c.get("/app.js").headers["cache-control"] == "no-cache"

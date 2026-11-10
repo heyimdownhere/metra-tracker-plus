@@ -7,7 +7,9 @@ server-side (a Metra data-license requirement).
 from __future__ import annotations
 
 import csv
+import hashlib
 import io
+import re
 import logging
 import time
 from datetime import datetime
@@ -414,9 +416,43 @@ def map_asset(path: str):
     return FileResponse(file, media_type=media, headers={"Cache-Control": "public, max-age=604800"})
 
 
+# ---- web app --------------------------------------------------------------------------
+# index.html links each script/stylesheet as "file?v=<content hash>", so the browser
+# can keep those files for a year and only fetches one again after it changes.
+ASSET_REF = re.compile(r'(?P<attr>(?:src|href))="(?P<path>[^"?#:]+\.(?:js|css))"')
+_index_cache: dict = {}
+
+
+def _versioned_index() -> bytes:
+    page = WEB_DIR / "index.html"
+    files = [page] + [WEB_DIR / m.group("path") for m in ASSET_REF.finditer(page.read_text())]
+    key = tuple((f, f.stat().st_mtime_ns) for f in files if f.exists())
+    if _index_cache.get("key") != key:
+        def stamp(m: re.Match) -> str:
+            f = WEB_DIR / m.group("path")
+            if not f.is_file():
+                return m.group(0)
+            digest = hashlib.sha1(f.read_bytes()).hexdigest()[:10]
+            return f'{m.group("attr")}="{m.group("path")}?v={digest}"'
+        _index_cache.update(key=key, body=ASSET_REF.sub(stamp, page.read_text()).encode())
+    return _index_cache["body"]
+
+
 @app.get("/", include_in_schema=False)
+@app.get("/index.html", include_in_schema=False)
 def index():
-    return FileResponse(WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+    return Response(_versioned_index(), media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
 
 
-app.mount("/", StaticFiles(directory=WEB_DIR), name="web")
+class WebFiles(StaticFiles):
+    """Static files: versioned links (?v=) are cached for a year, anything else is re-checked."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        if response.status_code in (200, 304):
+            versioned = b"v=" in scope.get("query_string", b"")
+            response.headers["Cache-Control"] = "public, max-age=31536000, immutable" if versioned else "no-cache"
+        return response
+
+
+app.mount("/", WebFiles(directory=WEB_DIR), name="web")

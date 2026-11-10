@@ -5,6 +5,8 @@
   const STATION_KEY = "metra.station";
   const THEME_KEY = "metra.theme";
   const DEST_KEY = "metra.dest";
+  const VIEW_KEY = "metra.view";
+  const DISMISSED_KEY = "metra.alerts.dismissed";
 
   const state = {
     tz: "America/Chicago",
@@ -514,7 +516,54 @@
     }).join("");
   }
 
+  // ---------- display options (this device only) ----------
+  const view = { pickers: "show", alerts: "all" };
+  try { Object.assign(view, JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")); } catch (e) { /* ignore */ }
+  let pickersOpen = false;  // "Change" shows hidden pickers for a moment
+
+  function applyView() {
+    const show = view.pickers !== "hide" || pickersOpen;
+    $("picker").hidden = !show;
+    const btn = $("change-btn");
+    btn.hidden = view.pickers !== "hide";
+    btn.textContent = pickersOpen ? "Done" : "Change";
+    btn.setAttribute("aria-expanded", String(show));
+    renderAlerts();
+  }
+
+  $("change-btn").addEventListener("click", () => {
+    pickersOpen = !pickersOpen;
+    applyView();
+    if (pickersOpen) $("station-input").focus();
+  });
+
+  $("view-btn").addEventListener("click", () => {
+    for (const k of ["pickers", "alerts"]) {
+      document.querySelectorAll(`#view-form input[name=${k}]`).forEach((r) => { r.checked = r.value === view[k]; });
+    }
+    $("view-dialog").showModal();
+  });
+  $("view-form").addEventListener("change", (e) => {
+    if (!e.target.name) return;
+    view[e.target.name] = e.target.value;
+    localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+    pickersOpen = false;
+    applyView();
+  });
+
   // ---------- alerts ----------
+  // Alert ids hidden with the banner's ✕; the banner returns when a new alert appears.
+  let dismissed = new Set();
+  try { dismissed = new Set(JSON.parse(localStorage.getItem(DISMISSED_KEY) || "[]")); } catch (e) { /* ignore */ }
+  let bannerIds = [];
+  $("alerts-dismiss").addEventListener("click", () => {
+    // Remember only alerts that still exist, so the list never grows.
+    const live = new Set((state.alerts || []).map((a) => a.id));
+    dismissed = new Set([...dismissed, ...bannerIds].filter((id) => live.has(id)));
+    localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissed]));
+    renderAlerts();
+  });
+
   $("alerts-toggle").addEventListener("click", () => {
     const listEl = $("alerts-list");
     listEl.hidden = !listEl.hidden;
@@ -534,15 +583,19 @@
   function renderAlerts() {
     const alerts = state.alerts || [];
     const box = $("alerts");
-    if (!alerts.length) { box.hidden = true; return; }
+    if (!alerts.length || view.alerts === "off") { box.hidden = true; return; }
     const myLines = new Set();
     for (const id of [state.station, state.dest, state.home.home_station, state.home.home_dest, state.home.work_station]) {
       const st = state.stationById.get(id);
       if (st) st.routes.forEach((r) => myLines.add(r));
     }
     const isMine = (a) => a.routes.some((r) => myLines.has(r.id));
-    const mine = alerts.filter(isMine);
-    const other = alerts.filter((a) => !isMine(a));
+    // Alerts you haven't hidden come first, so a new one leads the banner.
+    const fresh = (a) => (dismissed.has(a.id) ? 1 : 0);
+    const mine = alerts.filter(isMine).sort((x, y) => fresh(x) - fresh(y));
+    const other = view.alerts === "mine" ? [] : alerts.filter((a) => !isMine(a));
+    bannerIds = [...mine, ...other].map((a) => a.id);
+    if (!bannerIds.length || bannerIds.every((id) => dismissed.has(id))) { box.hidden = true; return; }
     const item = (a) => `<li>
       <div>${a.routes.map((r) => chip(r.short_name, r.color, r.text_color)).join(" ")}</div>
       <h3>${esc(a.header)}</h3>
@@ -610,22 +663,28 @@
 
   // ---------- boot ----------
   async function boot() {
-    // Wait for the server to finish its first schedule download.
-    while (!(await refreshStatus())) {
-      showEmpty("Downloading Metra schedule… this takes a few seconds on first start.");
-      await new Promise((r) => setTimeout(r, 3000));
+    // Ask for everything at once (one round trip instead of four in a row);
+    // only if the server is still downloading the schedule do we wait and ask again.
+    const fetchAll = () => [
+      api("/api/stations").catch(() => null),
+      api("/api/settings").catch(() => null),
+      api("/api/lines").catch(() => null),
+    ];
+    let pending = fetchAll();
+    if (!(await refreshStatus())) {
+      while (!(await refreshStatus())) {
+        showEmpty("Downloading Metra schedule… this takes a few seconds on first start.");
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      pending = fetchAll();
     }
     showEmpty("");
-    const [stations] = await Promise.all([
-      api("/api/stations"),
-      api("/api/lines").then((g) => mapView.setLines(g)).catch(console.warn),
-    ]);
+    let [stations, settings, lines] = await Promise.all(pending);
+    if (!Array.isArray(stations) || !stations.length) stations = await api("/api/stations");
     state.stations = stations;
     state.stationById = new Map(stations.map((s) => [s.id, s]));
-    mapView.setStations(stations);
-    try {
-      state.home = await api("/api/settings");
-    } catch (e) { console.warn(e); }
+    if (settings) state.home = settings;
+    else { try { state.home = await api("/api/settings"); } catch (e) { console.warn(e); } }
     const leg = state.home.leg;
     if (leg && state.stationById.has(leg.from)) {
       // Every device opens on the commute leg for right now (or home).
@@ -636,6 +695,10 @@
     toPicker.sync();
     if (state.station && state.stationById.has(state.station)) selectStation(state.station, { pan: false });
     else { state.station = null; refreshDepartures(); }
+    // The board comes first; the map gets its data right after.
+    mapView.setStations(stations);
+    if (lines) mapView.setLines(lines);
+    else api("/api/lines").then((g) => mapView.setLines(g)).catch(console.warn);
     // Open the map framed on your commute rather than the whole system.
     syncMapPlaces().then(() => mapView.fitPlaces(false));
     refreshTrains();
@@ -666,5 +729,6 @@
     });
   }
 
+  applyView();
   boot().catch((e) => { console.error(e); showEmpty("Something went wrong loading the app. Reload to retry."); });
 })();

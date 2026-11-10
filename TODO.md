@@ -34,6 +34,9 @@ Over the first days and weeks:
 - [ ] After about a week, on-time history lines ("90% on time · avg 3 min late") should start appearing. Check that they look sensible.
 - [ ] railsmaps.com: check its license. If reuse is allowed, add it as a basemap in `web/map.js`; otherwise drop it.
 
+- [ ] Display options (eye button): hide the From/Going-to boxes and the alerts banner; ✕ on the banner hides the current alerts until a new one appears. Check on your phone.
+- [ ] After updating, reopen the app twice: the second open should be noticeably quicker (scripts now come from the phone's cache).
+
 ## 3. Home Assistant
 
 - [ ] Find your phone's notify service (`notify.mobile_app_…`).
@@ -46,9 +49,11 @@ Over the first days and weeks:
 
 - [ ] **"Leave now" alerts.** Set how long it takes to get to your station; get told when to leave, adjusted for live delays ("Leave by 7:04 for the 7:12, running 3 min late"). It can use the home/work profile and `/api/now`. Deliver via Home Assistant (`notify.mobile_app_…`) or ntfy.
 - [ ] **Alerts for your own stations.** Feature station-level alerts (elevator outages, entrance closures) for your home and work stations, and notify when one affects your train.
-- [ ] **Remote access with Tailscale.** Install the Tailscale plugin on Unraid so your phone reaches the server from anywhere, privately. Don't port-forward 8080: the app has no login.
+- [x] **Remote access with Tailscale.** Working (the server at SERVER-IP). Don't port-forward the app: it has no login.
 
 ## 5. Ideas
+
+- [ ] Offline app shell (service worker): opens instantly even with no signal and shows the last board, marked as old.
 
 - [ ] **Wall-display mode** (`/?kiosk`): only the current commute board in large type, for a tablet by the door.
 - [ ] A small history page with charts (per-train on-time trend, worst days).

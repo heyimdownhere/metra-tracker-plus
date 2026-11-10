@@ -31,6 +31,9 @@
       <button id="commute-btn" class="icon-btn" type="button" aria-label="Commute settings" title="Commute: home, work and times">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6a2 2 0 0 1 2 2v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2Zm0 4h6V5H9v2Z"/></svg>
       </button>
+      <button id="view-btn" class="icon-btn" type="button" aria-label="Display options" title="Show or hide parts of the screen">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c5 0 9 4.5 10 7-1 2.5-5 7-10 7S3 14.5 2 12c1-2.5 5-7 10-7Zm0 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0 2.2a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6Z"/></svg>
+      </button>
       <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle light/dark mode">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>
       </button>
@@ -38,17 +41,20 @@
   </header>
 
   <section id="alerts" class="alerts" hidden>
-    <button id="alerts-toggle" class="alerts-summary" type="button" aria-expanded="false">
-      <span class="alert-icon" aria-hidden="true">⚠</span>
-      <span id="alerts-headline"></span>
-      <span id="alerts-count" class="alerts-count"></span>
-    </button>
+    <div class="alerts-row">
+      <button id="alerts-toggle" class="alerts-summary" type="button" aria-expanded="false">
+        <span class="alert-icon" aria-hidden="true">⚠</span>
+        <span id="alerts-headline"></span>
+        <span id="alerts-count" class="alerts-count"></span>
+      </button>
+      <button id="alerts-dismiss" class="alerts-x" type="button" aria-label="Hide these alerts" title="Hide these alerts (comes back when there's a new one)">✕</button>
+    </div>
     <ul id="alerts-list" class="alerts-list" hidden></ul>
   </section>
 
   <main class="layout">
     <aside class="panel">
-      <div class="picker">
+      <div class="picker" id="picker">
         <div class="picker-field">
           <div class="picker-label-row">
             <label for="station-input" class="picker-label">From</label>
@@ -93,6 +99,7 @@
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
             <span id="go-home-text">Home</span>
           </button>
+          <button id="change-btn" class="home-btn" type="button" aria-controls="picker" aria-expanded="false" hidden>Change</button>
           <span id="board-updated" class="muted small"></span>
         </div>
         <ol id="board-list" class="board-list"></ol>
@@ -154,6 +161,31 @@
         <button type="button" id="commute-cancel">Cancel</button>
         <button type="submit" class="primary">Save</button>
       </div>
+    </form>
+  </dialog>
+
+  <dialog id="view-dialog" class="sheet">
+    <form id="view-form" method="dialog">
+      <h2>Display</h2>
+      <p class="muted small">Saved on this device only.</p>
+      <fieldset class="seg-field">
+        <legend>From / Going to boxes</legend>
+        <div class="seg">
+          <label><input type="radio" name="pickers" value="show"><span>Show</span></label>
+          <label><input type="radio" name="pickers" value="hide"><span>Hide</span></label>
+        </div>
+        <p class="hint">Hidden: tap <b>Change</b> next to the board title when you need them.</p>
+      </fieldset>
+      <fieldset class="seg-field">
+        <legend>Alerts banner</legend>
+        <div class="seg">
+          <label><input type="radio" name="alerts" value="all"><span>All lines</span></label>
+          <label><input type="radio" name="alerts" value="mine"><span>My lines</span></label>
+          <label><input type="radio" name="alerts" value="off"><span>Off</span></label>
+        </div>
+        <p class="hint">"My lines" = lines through your home, work and selected stations. Tap ✕ on the banner to hide the current alerts until a new one appears.</p>
+      </fieldset>
+      <div class="btns"><button type="submit" class="primary">Done</button></div>
     </form>
   </dialog>
 
