@@ -437,3 +437,19 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
 .board-notice .txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .board-notice .badge { flex: none; }
 .board-notice .more { flex: none; color: var(--muted); font-size: 12px; }
+
+/* ---- selected train (board <-> map) ---- */
+.dep[data-trip] { cursor: pointer; }
+/* Hover only where there's a mouse (on phones it would stick after a tap). Keep the line-colour stripe. */
+@media (hover: hover) {
+  .dep[data-trip]:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); border-left-color: var(--line, var(--accent)); }
+}
+.dep.selected {
+  border-color: var(--accent); border-left-color: var(--line, var(--accent));
+  box-shadow: 0 0 0 1px var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel-2));
+}
+.dep[data-trip]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.train-marker.selected { z-index: 5 !important; }
+.train-marker.selected .train-dot { transform: scale(1.35); box-shadow: 0 0 0 4px var(--accent), 0 0 0 7px color-mix(in srgb, var(--accent) 35%, transparent); }
+.popup-board { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; }
+.popup-show { flex: none; padding: 4px 9px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; }

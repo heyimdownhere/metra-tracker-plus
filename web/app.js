@@ -88,13 +88,75 @@
     rows.push(["Status", status]);
     if (t.delay_reason) rows.push(["Reason", esc(t.delay_reason)]);
     if (t.timestamp) rows.push(["Updated", ago(t.timestamp)]);
-    return `<div class="popup"><h3>${title}</h3><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl></div>`;
+    // Is this train on the board you're looking at?
+    const d = state.departures;
+    const row = d && t.trip_id && (d.departures || []).find((r) => r.trip_id === t.trip_id);
+    const from = d && d.station ? d.station.name : "";
+    const foot = row
+      ? `<div class="popup-board"><span>Leaves ${esc(from)} <b>${esc(fmtTime(row.time))}</b></span><button type="button" class="popup-show" data-trip="${esc(t.trip_id)}">Show on board</button></div>`
+      : (from ? `<div class="popup-board muted">Not in the ${esc(from)} list</div>` : "");
+    return `<div class="popup"><h3>${title}</h3><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${foot}</div>`;
   }
 
   const mapView = MetraMap.create({
     container: $("map"),
     onStationClick: (id) => selectStation(id, { pan: false }),
     popupHtml: trainPopup,
+    // A train tapped on the map: highlight it on the board too.
+    onTrainSelect: (t) => {
+      state.selectedTrip = t ? t.trip_id : null;
+      markBoardSelection(false);
+    },
+  });
+
+  // ---------- train selection (board <-> map) ----------
+  function markBoardSelection(scroll) {
+    let hit = null;
+    document.querySelectorAll("#board-list .dep[data-trip]").forEach((li) => {
+      const on = !!state.selectedTrip && li.dataset.trip === state.selectedTrip;
+      li.classList.toggle("selected", on);
+      li.setAttribute("aria-pressed", String(on));
+      if (on) hit = li;
+    });
+    if (hit && scroll) hit.scrollIntoView({ behavior: "smooth", block: "center" });
+    return hit;
+  }
+  const narrow = () => matchMedia("(max-width: 820px)").matches;
+  function pickBoardTrain(li) {
+    const trip = li.dataset.trip;
+    if (state.selectedTrip === trip) {  // tap again to unselect
+      state.selectedTrip = null;
+      mapView.clearSelection(false);
+      markBoardSelection(false);
+      return;
+    }
+    state.selectedTrip = trip;
+    markBoardSelection(false);
+    const onMap = mapView.selectTrip(trip, li.dataset.route);
+    if (!onMap) {
+      const note = $("map-note");
+      note.textContent = "That train isn't running yet; its line is highlighted";
+      note.hidden = false;
+    }
+    // On phones the map is below the board: bring it into view.
+    if (narrow()) $("map").scrollIntoView({ behavior: "smooth", block: "center" });
+  }
+  $("board-list").addEventListener("click", (e) => {
+    if (e.target.closest("a, button")) return;
+    const li = e.target.closest(".dep[data-trip]");
+    if (li) pickBoardTrain(li);
+  });
+  $("board-list").addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const li = e.target.closest(".dep[data-trip]");
+    if (li) { e.preventDefault(); pickBoardTrain(li); }
+  });
+  // "Show on board" in a map popup.
+  document.addEventListener("click", (e) => {
+    const b = e.target.closest(".popup-show");
+    if (!b) return;
+    state.selectedTrip = b.dataset.trip;
+    if (!markBoardSelection(true)) return;
   });
 
   async function refreshTrains() {
@@ -506,7 +568,8 @@
         r.train ? `<span>#${esc(r.train)}</span>` : "",
         (r.live || r.tracking) && !r.cancelled ? delayHtml(r.delay, r.tracking) : "",
       ].filter(Boolean).join("");
-      return `<li class="dep${r.cancelled ? " cancelled" : ""}" style="--line:${esc(r.color)}">
+      const sel = r.trip_id && r.trip_id === state.selectedTrip;
+      return `<li class="dep${r.cancelled ? " cancelled" : ""}${sel ? " selected" : ""}" style="--line:${esc(r.color)}"${r.trip_id ? ` data-trip="${esc(r.trip_id)}" data-route="${esc(r.route_id || "")}" tabindex="0" role="button" aria-pressed="${sel}" title="Show this train on the map"` : ""}>
         <div class="timecol"><div class="time">${bigTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
         <div class="main"><div class="dest" title="${esc(r.destination)}">${esc(r.destination || r.route_name)}</div>
         <div class="meta">${meta}</div>
@@ -518,6 +581,7 @@
         <div class="mins">${minsHtml}</div>
       </li>`;
     }).join("");
+    mapView.refreshPopups();  // "Leaves … at" in an open train popup follows the board
   }
 
   // ---------- display options (this device only) ----------

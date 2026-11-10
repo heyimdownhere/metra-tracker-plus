@@ -60,7 +60,7 @@
 
   function isLight() { return document.documentElement.dataset.theme === "light"; }
 
-  function createMap({ container, onStationClick, popupHtml }) {
+  function createMap({ container, onStationClick, popupHtml, onTrainSelect }) {
     const settings = loadSettings();
     const save = () => localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 
@@ -305,8 +305,7 @@
     function applyOverlays() {
       if (map.getLayer("lines")) {
         map.setLayoutProperty("lines", "visibility", settings.lines ? "visible" : "none");
-        map.setPaintProperty("lines", "line-opacity", settings.lineOpacity / 100);
-        map.setPaintProperty("lines", "line-width", ["interpolate", ["linear"], ["zoom"], 8, settings.lineWidth * 0.6, 14, settings.lineWidth * 1.6]);
+        applyLineHighlight();
       }
       if (map.getLayer("stations")) map.setLayoutProperty("stations", "visibility", settings.stations ? "visible" : "none");
       container.classList.toggle("hide-trains", !settings.trains);
@@ -462,6 +461,7 @@
     function trainEl(t) {
       const el = document.createElement("div");
       el.className = "train-marker";
+      if (t.trip_id) el.dataset.trip = t.trip_id;
       el.setAttribute("role", "button");
       el.setAttribute("aria-label", `${t.route_short || "Train"} to ${t.destination || "unknown"}`);
       styleTrainEl(el, t);
@@ -472,6 +472,55 @@
       el.innerHTML = `<div class="train-dot${t.live ? "" : " est"}${t.delay >= 360 ? " late" : ""}" style="--c:${t.color}">${rot ? `<span class="arrow" style="--rot:${rot}"></span>` : ""}</div>`;
     }
 
+    // ---- selected train: its marker ringed, its line highlighted -------------
+    let selected = null;  // {id, tripId, routeId}
+    function applyLineHighlight() {
+      if (!map.getLayer("lines")) return;
+      const op = settings.lineOpacity / 100;
+      const w = (k) => ["interpolate", ["linear"], ["zoom"], 8, settings.lineWidth * 0.6 * k, 14, settings.lineWidth * 1.6 * k];
+      const rid = selected && selected.routeId;
+      map.setPaintProperty("lines", "line-opacity", rid ? ["case", ["==", ["get", "route_id"], rid], Math.max(op, 0.95), op * 0.25] : op);
+      map.setPaintProperty("lines", "line-width", rid ? ["case", ["==", ["get", "route_id"], rid], w(1.5), w(1)] : w(1));
+    }
+    function markSelected() {
+      for (const [id, m] of trainMarkers) m.getElement().classList.toggle("selected", !!selected && id === selected.id);
+    }
+    function setSelected(t, notify) {
+      selected = t ? { id: t.id, tripId: t.trip_id, routeId: t.route_id } : null;
+      markSelected();
+      ready.then(applyLineHighlight);
+      if (notify && onTrainSelect) onTrainSelect(t || null);
+    }
+    // Select a train by trip (from the board). Returns false if it isn't on the map.
+    function selectTrip(tripId, routeId) {
+      const t = lastTrains && lastTrains.trains.find((x) => x.trip_id === tripId);
+      if (!t) {
+        // Not running yet: just highlight its line.
+        selected = routeId ? { id: null, tripId, routeId } : null;
+        markSelected();
+        ready.then(applyLineHighlight);
+        for (const m of trainMarkers.values()) if (m.getPopup().isOpen()) m.togglePopup();
+        return false;
+      }
+      setSelected(t, false);
+      for (const [id, other] of trainMarkers) if (id !== t.id && other.getPopup().isOpen()) other.togglePopup();
+      const m = trainMarkers.get(t.id);
+      map.flyTo({ center: [t.lon, t.lat], zoom: Math.max(map.getZoom(), 13), duration: 800 });
+      if (m && !m.getPopup().isOpen()) m.togglePopup();
+      return true;
+    }
+    function clearSelection(notify) {
+      if (!selected) return;
+      setSelected(null, notify);
+    }
+    // Tapping empty map clears the selection (not taps on markers or stations).
+    map.on("click", (e) => {
+      const target = e.originalEvent && e.originalEvent.target;
+      if (target && target.closest && target.closest(".maplibregl-marker, .maplibregl-popup")) return;
+      if (map.getLayer("stations") && map.queryRenderedFeatures(e.point, { layers: ["stations"] }).length) return;
+      clearSelection(true);
+    });
+
     function updateTrains(data) {
       lastTrains = data;
       const seen = new Set();
@@ -480,7 +529,14 @@
         let m = trainMarkers.get(t.id);
         if (!m) {
           const popup = new maplibregl.Popup({ offset: 14, maxWidth: "280px" }).setHTML(popupHtml(t));
-          m = new maplibregl.Marker({ element: trainEl(t), rotationAlignment: "viewport", pitchAlignment: "viewport" })
+          const el = trainEl(t);
+          const id = t.id;
+          el.addEventListener("click", () => {
+            const cur = lastTrains && lastTrains.trains.find((x) => x.id === id);
+            if (cur) setSelected(cur, true);
+          });
+          popup.on("close", () => { if (selected && selected.id === id) clearSelection(true); });
+          m = new maplibregl.Marker({ element: el, rotationAlignment: "viewport", pitchAlignment: "viewport" })
             .setLngLat([t.lon, t.lat]).setPopup(popup).addTo(map);
           trainMarkers.set(t.id, m);
         } else {
@@ -491,6 +547,20 @@
       }
       for (const [id, m] of trainMarkers) {
         if (!seen.has(id)) { m.remove(); trainMarkers.delete(id); }
+      }
+      // A train picked on the board before it started shows up once it's running.
+      if (selected && !selected.id && selected.tripId) {
+        const t = data.trains.find((x) => x.trip_id === selected.tripId);
+        if (t) selected.id = t.id;
+      }
+      markSelected();
+    }
+    // Refresh open popups (e.g. after the board changes).
+    function refreshPopups() {
+      if (!lastTrains) return;
+      for (const t of lastTrains.trains) {
+        const m = trainMarkers.get(t.id);
+        if (m && m.getPopup().isOpen()) m.getPopup().setHTML(popupHtml(t));
       }
     }
 
@@ -578,6 +648,10 @@
       setLines,
       setStations,
       updateTrains,
+      selectTrip,
+      clearSelection,
+      refreshPopups,
+      get selectedTrip() { return selected && selected.tripId; },
       setPlaces,
       fitPlaces,
       flyTo(lat, lon) { map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 12.5), duration: 800 }); },
