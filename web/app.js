@@ -370,6 +370,7 @@
       });
       if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || `HTTP ${r.status}`);
       state.home = await r.json();
+      if (!$("settings-page").hidden) fillSettings();
     } catch (e) {
       console.warn(e);
       alert(`Couldn't save the ${what}: ${e.message}`);
@@ -706,13 +707,73 @@
     if (pickersOpen) $("station-input").focus();
   });
 
-  $("view-btn").addEventListener("click", () => {
+  // ---------- settings page (#settings, so the phone's back button closes it) ----------
+  function openSettings() {
+    if (location.hash !== "#settings") location.hash = "settings";
+    else showSettings(true);
+  }
+  function closeSettings() {
+    if (location.hash === "#settings") history.back();
+    else showSettings(false);
+  }
+  function showSettings(on) {
+    const page = $("settings-page");
+    if (on === !page.hidden) return;
+    page.hidden = !on;
+    document.body.classList.toggle("settings-open", on);
+    if (on) { fillSettings(); window.scrollTo(0, 0); }
+    else {
+      // The map may have been resized while hidden.
+      requestAnimationFrame(() => { if (!mapHidden()) mapView.resize(); });
+    }
+  }
+  window.addEventListener("hashchange", () => showSettings(location.hash === "#settings"));
+  $("settings-back").addEventListener("click", closeSettings);
+  $("settings-done").addEventListener("click", closeSettings);
+  $("settings-commute-edit").addEventListener("click", () => openCommute());
+
+  function fillSettings() {
+    const p = state.home || {};
+    const name = (id) => (id && state.stationById.get(id) ? state.stationById.get(id).name : null);
+    const DAYN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    const days = (p.work_days || []).map((d) => DAYN[d]).join(", ");
+    const clock = (hhmm) => {
+      const [h, m] = hhmm.split(":").map(Number);
+      return `${h % 12 || 12}:${String(m).padStart(2, "0")} ${h < 12 ? "AM" : "PM"}`;
+    };
+    const kv = (rows) => rows.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${v == null || v === "" ? '<span class="muted">Not set</span>' : esc(v)}</dd>`).join("");
+    $("settings-commute").innerHTML = kv([
+      ["Home", name(p.home_station)],
+      ["Work", name(p.work_station)],
+      ["Trains home from", p.work_station && p.switch_time ? clock(p.switch_time) : null],
+      ["Workdays", p.work_station ? days : null],
+    ]);
+    const s = state.status || {};
+    const mapSt = s.map || {};
+    $("settings-about").innerHTML = kv([
+      ["Realtime", s.mode === "schedule-only" ? "Off (no API key)" : s.realtime_live ? `Live (${Math.round(s.realtime_age || 0)}s old)` : "Unavailable right now"],
+      ["Schedule", s.static_version || null],
+      ["Map", {
+        ready: `Stored on the server (${Math.round((mapSt.size || 0) / 1e6)} MB)`,
+        downloading: "the server is downloading it",
+        missing: "Not downloaded yet",
+        error: `Download failed: ${mapSt.error || "unknown error"}`,
+        disabled: "the server's map is off (MAP_DOWNLOAD=false); using online maps",
+      }[mapSt.state] || null],
+      ["Trains update", `every ${state.interval}s`],
+    ]);
+    const theme = document.documentElement.dataset.theme;
+    document.querySelectorAll("input[name=theme]").forEach((r) => { r.checked = r.value === theme; });
     syncCountUi();
     for (const k of ["mapTrains", "pickers", "alerts", "alertLines"]) {
       document.querySelectorAll(`#view-form input[name=${k}]`).forEach((r) => { r.checked = r.value === view[k]; });
     }
-    $("view-dialog").showModal();
-  });
+  }
+  document.querySelectorAll("input[name=theme]").forEach((r) => r.addEventListener("change", () => {
+    if (r.checked && document.documentElement.dataset.theme !== r.value) $("theme-toggle").click();
+  }));
+
+  $("view-btn").addEventListener("click", () => openSettings());
   $("view-form").addEventListener("change", (e) => {
     if (!e.target.name) return;
     if (e.target.name === "count") {

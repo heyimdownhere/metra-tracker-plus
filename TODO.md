@@ -34,7 +34,7 @@ Over the first days and weeks:
 - [ ] After about a week, on-time history lines ("90% on time · avg 3 min late") should start appearing. Check that they look sensible.
 - [ ] railsmaps.com: check its license. If reuse is allowed, add it as a basemap in `web/map.js`; otherwise drop it.
 
-- [ ] Display options (eye button): hide the From/Going-to boxes; alerts as a 🔔 bell (default; number = new alerts, red if on your lines), a banner, or off. Check on your phone.
+- [ ] Settings page (gear button): hide the From/Going-to boxes; alerts as a 🔔 bell (default; number = new alerts, red if on your lines), a banner, or off. Check on your phone.
 - [ ] After updating, reopen the app twice: the second open should be noticeably quicker (scripts now come from the phone's cache).
 
 - [ ] Weekly schedule re-download: about a week after updating, the log should show "Weekly schedule check: downloading the full schedule" then "Schedule unchanged" (or "Now using schedule …").

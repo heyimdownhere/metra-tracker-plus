@@ -35,8 +35,8 @@
       <button id="commute-btn" class="icon-btn" type="button" aria-label="Commute settings" title="Commute: home, work and times">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6a2 2 0 0 1 2 2v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2Zm0 4h6V5H9v2Z"/></svg>
       </button>
-      <button id="view-btn" class="icon-btn" type="button" aria-label="Display options" title="Show or hide parts of the screen">
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5c5 0 9 4.5 10 7-1 2.5-5 7-10 7S3 14.5 2 12c1-2.5 5-7 10-7Zm0 3a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm0 2.2a1.8 1.8 0 1 1 0 3.6 1.8 1.8 0 0 1 0-3.6Z"/></svg>
+      <button id="view-btn" class="icon-btn" type="button" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.3 2h3.4l.5 2.6a7.8 7.8 0 0 1 1.9 1.1l2.5-.9 1.7 2.9-2 1.8a7.9 7.9 0 0 1 0 2.2l2 1.8-1.7 2.9-2.5-.9a7.8 7.8 0 0 1-1.9 1.1l-.5 2.6h-3.4l-.5-2.6a7.8 7.8 0 0 1-1.9-1.1l-2.5.9-1.7-2.9 2-1.8a7.9 7.9 0 0 1 0-2.2l-2-1.8 1.7-2.9 2.5.9a7.8 7.8 0 0 1 1.9-1.1L10.3 2ZM12 8.6a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Z"/></svg>
       </button>
       <button id="theme-toggle" class="icon-btn" type="button" aria-label="Toggle light/dark mode">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z"/></svg>
@@ -179,10 +179,32 @@
     </form>
   </dialog>
 
-  <dialog id="view-dialog" class="sheet">
-    <form id="view-form" method="dialog">
-      <h2>Display</h2>
-      <p class="muted small">Saved on this device only.</p>
+  <section id="settings-page" class="settings-page" aria-labelledby="settings-title" hidden>
+    <div class="settings-inner">
+    <div class="settings-head">
+      <button type="button" id="settings-back" class="back-btn" aria-label="Back to trains">← Back</button>
+      <h2 id="settings-title">Settings</h2>
+    </div>
+
+    <section class="settings-card">
+      <div class="card-head"><h3>Your commute</h3><span class="muted small">All devices</span></div>
+      <dl id="settings-commute" class="kv"></dl>
+      <button type="button" id="settings-commute-edit" class="secondary-btn">Edit commute</button>
+    </section>
+
+    <section class="settings-card">
+      <div class="card-head"><h3>Appearance</h3><span class="muted small">This device</span></div>
+      <fieldset class="seg-field">
+        <legend>Theme</legend>
+        <div class="seg">
+          <label><input type="radio" name="theme" value="light"><span>Light</span></label>
+          <label><input type="radio" name="theme" value="dark"><span>Dark</span></label>
+        </div>
+      </fieldset>
+    </section>
+
+    <form id="view-form" class="settings-card" onsubmit="return false">
+      <div class="card-head"><h3>Display</h3><span class="muted small">This device</span></div>
       <fieldset class="seg-field">
         <legend>Trains on the board</legend>
         <div class="seg">
@@ -232,9 +254,16 @@
         </div>
         <p class="hint">"My lines" = lines through your home, work and selected stations.</p>
       </fieldset>
-      <div class="btns"><button type="submit" class="primary">Done</button></div>
     </form>
-  </dialog>
+
+    <section class="settings-card">
+      <div class="card-head"><h3>About</h3></div>
+      <dl id="settings-about" class="kv"></dl>
+      <p class="muted small">Schedule &amp; realtime data provided by Metra. Not affiliated with Metra.</p>
+    </section>
+    <div class="settings-foot"><button type="button" id="settings-done" class="primary-btn">Done</button></div>
+    </div>
+  </section>
 
   <script src="vendor/maplibre/maplibre-gl.js"></script>
   <script src="vendor/protomaps/basemaps.js"></script>
