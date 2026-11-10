@@ -19,7 +19,7 @@ Updated 2026-11-09. The app runs against Metra's **real** schedule and **live** 
 
 Map tiles were blocked in the dev sandbox, so these have never been seen drawing:
 
-- [ ] Basemaps: Auto/Dark/Light/Streets (CARTO), Satellite (Esri), railway-tracks overlay (OpenRailwayMap).
+- [ ] Map backgrounds (layers button): Streets, Light, Dark (OpenFreeMap) and Satellite (Esri), plus the tracks overlay (OpenRailwayMap). These couldn't be reached from the dev sandbox; the fallback to Simple was tested.
 - [ ] 3D buildings (OpenFreeMap) in the Loop, in dark and light mode, and phone performance with them on.
 - [ ] Estimated train positions (schedule-only mode) sit on the lines, especially the ME and RI branches.
 - [ ] Refresh the README screenshots once the map tiles show (current ones have a blank map background).
@@ -41,7 +41,6 @@ Over the first days and weeks:
 
 ## 4. Next features
 
-- [ ] **Map background needs a key-free source.** CARTO's basemaps now show "API KEY REQUIRED". Either switch to a free no-key style (e.g. OpenFreeMap) or get a CARTO key.
 
 - [ ] **"Leave now" alerts.** Set how long it takes to get to your station; get told when to leave, adjusted for live delays ("Leave by 7:04 for the 7:12, running 3 min late"). It can use the home/work profile and `/api/now`. Deliver via Home Assistant (`notify.mobile_app_…`) or ntfy.
 - [ ] **Alerts for your own stations.** Feature station-level alerts (elevator outages, entrance closures) for your home and work stations, and notify when one affects your train.
@@ -63,6 +62,8 @@ Over the first days and weeks:
 - **Home + work commute**: work station, switch time (presets Noon–7 PM) and workdays. On workdays the app opens on home → work before the switch time and work → home after; other days on the home board. Settable in the app (briefcase button with searchable station pickers, "Set as home" / "Set as work") or by env (`HOME_STATION`, `WORK_STATION`, `COMMUTE_SWITCH_TIME`, `WORK_DAYS`). App-saved values win; unset ones fall back to env. A fresh install shows a "Set up your commute" card. Adds `/api/now` and `/api/work`.
 
 **Board and map**
+- Map background switched from CARTO (now needs an API key) to **Simple**, the app's own background with no outside service, key or extra data, as the default. Optional free, no-key backgrounds: OpenFreeMap Streets/Light/Dark and Esri Satellite, with automatic fallback to Simple if one can't load.
+- Home, work and switch time are saved on the server (`/config/settings.json`) and survive restarts and updates (verified).
 - Home and work shown on the map as labelled pins (blue house, amber briefcase) that sit above trains, a pulsing ring on the station you're viewing, the map opening framed on your commute, and a "show my commute" map button.
 - On-time history per departure ("90% on time · avg 3 min late · 21 days"): last 30 days of this train at this station on the same kind of day. Shown after 5+ days of data.
 - Home station shared by all devices; estimated arrival at each train's final stop, shown as ~~scheduled~~ estimate; AM/PM kept on one line.

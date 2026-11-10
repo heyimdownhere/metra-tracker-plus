@@ -5,7 +5,7 @@
 
   const SETTINGS_KEY = "metra.map";
   const DEFAULTS = {
-    basemap: "auto",       // auto | dark | light | streets | satellite | none
+    basemap: "simple",     // simple | streets | light | dark | satellite
     basemapOpacity: 100,
     rail: false,           // OpenRailwayMap track overlay
     railOpacity: 70,
@@ -18,17 +18,22 @@
     lines: true,
   };
 
-  const CARTO = (style) => ["a", "b", "c", "d"].map((s) => `https://${s}.basemaps.cartocdn.com/${style}/{z}/{x}/{y}@2x.png`);
-  const CARTO_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>';
+  // Backgrounds. "simple" is the app's own background: no outside map service,
+  // no key and no extra data. The others are free and need no API key:
+  // OpenFreeMap vector styles and Esri satellite imagery. Each style URL list
+  // is tried in order; if all fail, the map falls back to "simple".
+  const OFM = (name) => `https://tiles.openfreemap.org/styles/${name}`;
   const BASEMAPS = {
-    dark: { label: "Dark", tiles: CARTO("dark_all"), attribution: CARTO_ATTR },
-    light: { label: "Light", tiles: CARTO("light_all"), attribution: CARTO_ATTR },
-    streets: { label: "Streets", tiles: CARTO("rastertiles/voyager"), attribution: CARTO_ATTR },
+    simple: { label: "Simple (no map data)" },
+    streets: { label: "Streets", styles: [OFM("liberty"), OFM("bright")], light: true },
+    light: { label: "Light", styles: [OFM("positron")], light: true },
+    dark: { label: "Dark", styles: [OFM("dark"), OFM("fiord")] },
     satellite: {
       label: "Satellite",
-      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
-      attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics",
-      tileSize: 256,
+      raster: {
+        tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+        attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics",
+      },
     },
   };
   // Railway infrastructure overlay (tracks, yards, stations) from OpenStreetMap.
@@ -42,8 +47,12 @@
   const BUILDINGS_ATTR = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a>';
 
   function loadSettings() {
-    try { return { ...DEFAULTS, ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}") }; }
-    catch (e) { return { ...DEFAULTS }; }
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"); } catch (e) { /* ignore */ }
+    const s = { ...DEFAULTS, ...saved };
+    // Older versions had "auto"/"none" (and CARTO maps that now need a key).
+    if (!BASEMAPS[s.basemap] || s.basemap === "auto" || s.basemap === "none") s.basemap = "simple";
+    return s;
   }
 
   function isLight() { return document.documentElement.dataset.theme === "light"; }
@@ -52,19 +61,22 @@
     const settings = loadSettings();
     const save = () => localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 
-    const sources = {};
-    const layers = [];
-    for (const [id, b] of Object.entries(BASEMAPS)) {
-      sources[`base-${id}`] = { type: "raster", tiles: b.tiles, tileSize: b.tileSize || 512, attribution: b.attribution, maxzoom: 19 };
-      layers.push({ id: `base-${id}`, type: "raster", source: `base-${id}`, layout: { visibility: "none" } });
-    }
+    const themeBg = () => (isLight() ? "#eef1f5" : "#0f1216");
 
-    sources.rail = { type: "raster", tiles: RAIL_OVERLAY.tiles, tileSize: 256, attribution: RAIL_OVERLAY.attribution, maxzoom: 19 };
-    layers.push({ id: "rail", type: "raster", source: "rail", layout: { visibility: "none" } });
+    // A style made only of our background (plus satellite imagery if chosen).
+    function ownStyle(name) {
+      const style = { version: 8, sources: {}, layers: [{ id: "bg", type: "background", paint: { "background-color": themeBg() } }] };
+      const r = BASEMAPS[name] && BASEMAPS[name].raster;
+      if (r) {
+        style.sources.sat = { type: "raster", tiles: r.tiles, tileSize: 256, attribution: r.attribution, maxzoom: 19 };
+        style.layers.push({ id: "sat", type: "raster", source: "sat" });
+      }
+      return style;
+    }
 
     const map = new maplibregl.Map({
       container,
-      style: { version: 8, sources, layers: [{ id: "bg", type: "background", paint: { "background-color": "#0f1216" } }, ...layers] },
+      style: ownStyle("simple"),
       center: [-87.85, 41.88],
       zoom: 8.6,
       maxPitch: 70,
@@ -76,34 +88,75 @@
     map.addControl(new maplibregl.AttributionControl({ compact: true, customAttribution: "Data: Metra" }), "bottom-right");
     map.addControl(new maplibregl.GeolocateControl({ positionOptions: { enableHighAccuracy: false }, trackUserLocation: false }), "top-left");
 
-    const ready = new Promise((resolve) => map.on("load", resolve));
+    let markReady;
+    const ready = new Promise((resolve) => { markReady = resolve; });
     const trainMarkers = new Map();
     let lastTrains = null;
     let buildingsAdded = false;
+    // Overlay data is kept here so it can be re-added after a background change
+    // (switching styles replaces every source and layer).
+    let linesData = { type: "FeatureCollection", features: [] };
+    let stationsData = { type: "FeatureCollection", features: [] };
+    let currentBase = "simple";
+    let attempt = null;  // {name, index, url, timer} while a background style loads
 
     // ---- apply settings ----------------------------------------------------
-    function activeBasemap() {
-      if (settings.basemap === "auto") return isLight() ? "light" : "dark";
-      return settings.basemap;
-    }
+    function activeBasemap() { return currentBase; }
 
     function applyBasemap() {
-      const active = activeBasemap();
-      for (const id of Object.keys(BASEMAPS)) {
-        map.setLayoutProperty(`base-${id}`, "visibility", id === active ? "visible" : "none");
-        map.setPaintProperty(`base-${id}`, "raster-opacity", settings.basemapOpacity / 100);
+      if (map.getLayer("bg")) map.setPaintProperty("bg", "background-color", themeBg());
+      if (map.getLayer("base-dim")) {
+        // Basemap opacity = fade the background toward the app's own colour.
+        map.setPaintProperty("base-dim", "background-color", themeBg());
+        map.setPaintProperty("base-dim", "background-opacity", 1 - settings.basemapOpacity / 100);
       }
-      map.setLayoutProperty("rail", "visibility", settings.rail ? "visible" : "none");
-      map.setPaintProperty("rail", "raster-opacity", settings.railOpacity / 100);
-      map.setPaintProperty("bg", "background-color", isLight() ? "#eef1f5" : "#0f1216");
+      if (map.getLayer("rail")) {
+        map.setLayoutProperty("rail", "visibility", settings.rail ? "visible" : "none");
+        map.setPaintProperty("rail", "raster-opacity", settings.railOpacity / 100);
+      }
       if (map.getLayer("buildings-3d")) {
         map.setPaintProperty("buildings-3d", "fill-extrusion-color", buildingColor());
       }
     }
 
+    // Switch the background. Overlays are re-added on "style.load".
+    function setBasemap(name, index = 0) {
+      if (attempt) clearTimeout(attempt.timer);
+      attempt = null;
+      const b = BASEMAPS[name] || BASEMAPS.simple;
+      if (!b.styles) {
+        currentBase = BASEMAPS[name] ? name : "simple";
+        map.setStyle(ownStyle(currentBase), { diff: false });
+        return;
+      }
+      if (index >= b.styles.length) {
+        console.warn(`map: "${name}" background unavailable; using Simple`);
+        showNote(`${b.label} map couldn't load; showing Simple instead`);
+        setBasemap("simple");
+        return;
+      }
+      currentBase = name;
+      const url = b.styles[index];
+      attempt = { name, index, url, timer: setTimeout(() => fallback(url), 12000) };
+      map.setStyle(url, { diff: false });
+    }
+
+    function fallback(url) {
+      if (!attempt || attempt.url !== url) return;
+      const { name, index } = attempt;
+      setBasemap(name, index + 1);
+    }
+
+    function showNote(text) {
+      const note = document.getElementById("map-note");
+      if (!note) return;
+      note.textContent = text;
+      note.hidden = false;
+    }
+
     function buildingColor() {
       const active = activeBasemap();
-      const light = active === "light" || active === "streets" || (active === "none" && isLight());
+      const light = (BASEMAPS[active] && BASEMAPS[active].light) || (active === "simple" && isLight());
       return [
         "interpolate", ["linear"], ["coalesce", ["get", "render_height"], 0],
         0, light ? "#d6dbe2" : "#2a3340",
@@ -162,15 +215,22 @@
       applyOverlays();
     }
 
-    ready.then(() => {
-      // Overlay sources/layers, filled in by setLines/setStations.
-      map.addSource("lines", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+    function addOverlays() {
+      if (attempt) { clearTimeout(attempt.timer); attempt = null; }
+      buildingsAdded = false;
+      if (currentBase !== "simple") {
+        // Sits on top of the background; its opacity implements "Basemap opacity".
+        map.addLayer({ id: "base-dim", type: "background", paint: { "background-color": themeBg(), "background-opacity": 0 } });
+      }
+      map.addSource("rail", { type: "raster", tiles: RAIL_OVERLAY.tiles, tileSize: 256, attribution: RAIL_OVERLAY.attribution, maxzoom: 19 });
+      map.addLayer({ id: "rail", type: "raster", source: "rail", layout: { visibility: "none" } });
+      map.addSource("lines", { type: "geojson", data: linesData });
       map.addLayer({
         id: "lines", type: "line", source: "lines",
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": ["get", "color"], "line-width": 4, "line-opacity": 0.9 },
       });
-      map.addSource("stations", { type: "geojson", data: { type: "FeatureCollection", features: [] } });
+      map.addSource("stations", { type: "geojson", data: stationsData });
       map.addLayer({
         id: "stations", type: "circle", source: "stations",
         paint: {
@@ -181,24 +241,34 @@
           "circle-pitch-alignment": "map",
         },
       });
-      const hover = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, className: "hover-popup" });
-      map.on("mouseenter", "stations", (e) => {
-        map.getCanvas().style.cursor = "pointer";
-        const f = e.features[0];
-        hover.setLngLat(f.geometry.coordinates).setText(f.properties.name).addTo(map);
-      });
-      map.on("mouseleave", "stations", () => { map.getCanvas().style.cursor = ""; hover.remove(); });
-      map.on("click", "stations", (e) => onStationClick(e.features[0].properties.id));
-      // Don't let a failed basemap/buildings host break the rest of the map.
-      map.on("error", (e) => console.warn("map:", e && e.error ? e.error.message : e));
       applyAll(false);
+      markReady();
+    }
+    map.on("style.load", addOverlays);
+
+    // Station hover/click: bound once, by layer id, so they survive style changes.
+    const hover = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 10, className: "hover-popup" });
+    map.on("mouseenter", "stations", (e) => {
+      map.getCanvas().style.cursor = "pointer";
+      const f = e.features[0];
+      hover.setLngLat(f.geometry.coordinates).setText(f.properties.name).addTo(map);
     });
+    map.on("mouseleave", "stations", () => { map.getCanvas().style.cursor = ""; hover.remove(); });
+    map.on("click", "stations", (e) => onStationClick(e.features[0].properties.id));
+    map.on("error", (e) => {
+      const err = e && e.error;
+      console.warn("map:", err ? err.message : e);
+      // A background style that fails to load: try the next one / fall back.
+      if (attempt && err && (err.url === attempt.url || String(err.message || "").includes(attempt.url))) fallback(attempt.url);
+    });
+    // Load the saved background once the map exists.
+    ready.then(() => { if (settings.basemap !== "simple") setBasemap(settings.basemap); });
 
     // ---- settings panel ----------------------------------------------------
     function buildPanel() {
       const btn = document.getElementById("map-settings-btn");
       const panel = document.getElementById("map-settings");
-      const basemapOpts = [["auto", "Auto (match theme)"], ...Object.entries(BASEMAPS).map(([k, b]) => [k, b.label]), ["none", "None"]];
+      const basemapOpts = Object.entries(BASEMAPS).map(([k, b]) => [k, b.label]);
       panel.innerHTML = `
         <h3>Map</h3>
         <label class="row"><span>Basemap</span>
@@ -227,6 +297,10 @@
           const out = el.parentElement.querySelector("output");
           if (out) out.textContent = el.dataset.k === "lineWidth" ? `${v}px` : `${v}%`;
         });
+        // Nothing to fade on the Simple background.
+        const op = panel.querySelector('[data-k="basemapOpacity"]');
+        op.disabled = settings.basemap === "simple";
+        op.closest(".row").classList.toggle("disabled", op.disabled);
       };
       sync();
       panel.addEventListener("input", (e) => {
@@ -236,13 +310,18 @@
         settings[k] = el.type === "checkbox" ? el.checked : el.type === "range" ? Number(el.value) : el.value;
         save();
         sync();
-        ready.then(() => applyAll(k === "buildings"));
+        if (k === "basemap") ready.then(() => setBasemap(settings.basemap));
+        else ready.then(() => applyAll(k === "buildings"));
       });
       panel.addEventListener("click", (e) => {
         const act = e.target.closest("[data-act]");
         if (!act) return;
         if (act.dataset.act === "reset-view") { map.easeTo({ pitch: 0, bearing: 0, duration: 600 }); fitLines(); }
-        if (act.dataset.act === "defaults") { Object.assign(settings, DEFAULTS); save(); sync(); ready.then(() => applyAll(false)); }
+        if (act.dataset.act === "defaults") {
+          const baseChanged = settings.basemap !== DEFAULTS.basemap;
+          Object.assign(settings, DEFAULTS); save(); sync();
+          ready.then(() => (baseChanged ? setBasemap(settings.basemap) : applyAll(false)));
+        }
       });
       const toggle = (open) => { panel.hidden = !open; btn.setAttribute("aria-expanded", String(open)); };
       btn.addEventListener("click", () => toggle(panel.hidden));
@@ -259,19 +338,21 @@
     }
 
     async function setLines(geo) {
+      linesData = geo;
       await ready;
-      map.getSource("lines").setData(geo);
+      if (map.getSource("lines")) map.getSource("lines").setData(geo);
       const b = new maplibregl.LngLatBounds();
       for (const f of geo.features) for (const c of f.geometry.coordinates) b.extend(c);
       if (!b.isEmpty()) { linesBounds = b; map.fitBounds(b, { padding: 20, duration: 0 }); }
     }
 
     async function setStations(list) {
-      await ready;
-      map.getSource("stations").setData({
+      stationsData = {
         type: "FeatureCollection",
         features: list.map((s) => ({ type: "Feature", properties: { id: s.id, name: s.name }, geometry: { type: "Point", coordinates: [s.lon, s.lat] } })),
-      });
+      };
+      await ready;
+      if (map.getSource("stations")) map.getSource("stations").setData(stationsData);
     }
 
     function trainEl(t) {

@@ -366,3 +366,5 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
 }
 .commute-ctl svg { width: 16px; height: 16px; fill: currentColor; }
 [data-theme="dark"] .commute-ctl svg { fill: #fff; }
+
+.map-settings .row.disabled { opacity: .45; }

@@ -27,7 +27,7 @@ It's light on your phone's data: your home server talks to Metra, and your phone
 ## Features
 
 - **Map** (MapLibre GL): every Metra line drawn in its official color from `shapes.txt`, plus station dots and train markers that refresh every 30 s. Click a train to see its line, train number, destination, next stop, delay, and delay reason.
-  - **Map settings panel** (layers button, top right): basemap (Auto/Dark/Light/Streets/Satellite/None), basemap opacity, an OpenRailwayMap railway-tracks overlay with its own opacity, **3D buildings** with opacity, line opacity and width, and on/off switches for lines, stations and trains. Your choices are saved in the browser.
+  - **Map settings panel** (layers button, top right): background: **Simple** (the default: the app's own clean background, no outside map service, no key, no extra data) or a real map (Streets, Light, Dark from OpenFreeMap; Satellite from Esri; all free, no API key; if one can't load the map falls back to Simple), basemap opacity, an OpenRailwayMap railway-tracks overlay with its own opacity, **3D buildings** with opacity, line opacity and width, and on/off switches for lines, stations and trains. Your choices are saved in the browser.
   - Right-drag (or two-finger drag on a phone) to tilt and rotate.
 - **Home station**: tap **⌂ Set as home** next to "From" (optionally with a "Going to" station). Home is saved on the server (`/config/settings.json`), so every phone, tablet and computer opens straight to it. A **Home** button brings you back after looking at other stations.
 - **Departure board**: searchable station picker (search by station or line, e.g. "upn") that remembers your last choice, plus an optional **Going to** station that shows only trains to that stop, with arrival time and trip length. Each train also shows its **estimated arrival at its final station** (e.g. "Est. at Kenosha 11:46 AM"), using live delays when Metra has them.
@@ -51,7 +51,7 @@ It's light on your phone's data: your home server talks to Metra, and your phone
 
 - Static GTFS comes from `https://schedules.metrarail.com/gtfs/schedule.zip`. The app checks `published.txt` every 5 minutes and reloads when it changes. The parsed result is cached in `/config/gtfs/`, so a restart takes well under a second.
 - GTFS-Realtime (`positions`, `tripupdates`, `alerts`) comes from `https://gtfspublic.metrarr.com/gtfs/public/…` with `Authorization: Bearer $METRA_API_TOKEN`. It is polled every 30 s and never faster.
-- **The browser never contacts Metra.** All Metra requests are made by the server, as Metra's license requires. The browser only loads map tiles (CARTO, Esri, OpenFreeMap, OpenRailwayMap).
+- **The browser never contacts Metra.** All Metra requests are made by the server, as Metra's license requires. With the default Simple background the browser loads nothing else either; map tiles (OpenFreeMap, Esri, OpenRailwayMap) are only fetched if you turn on a map background, 3D buildings or the tracks overlay.
 - Trip, service, shape and stop IDs are treated as opaque strings. If realtime trip IDs stop matching the schedule (Metra is changing its ID format), trips are matched by route + start time + active service day instead.
 
 ## Install on Unraid (the server)
@@ -201,4 +201,4 @@ METRA_LIVE_TESTS=1 pytest       # also parse Metra's real static feed
 
 ## Credits
 
-Schedule and realtime data are provided by Metra. This project is not affiliated with Metra. The map uses [MapLibre GL JS](https://maplibre.org/) (BSD-3, vendored), basemaps from © CARTO / © OpenStreetMap contributors and Esri World Imagery, 3D buildings from OpenFreeMap / OpenMapTiles, and the rail overlay from OpenRailwayMap (CC-BY-SA).
+Schedule and realtime data are provided by Metra. This project is not affiliated with Metra. The map uses [MapLibre GL JS](https://maplibre.org/) (BSD-3, vendored). Optional map backgrounds and 3D buildings come from [OpenFreeMap](https://openfreemap.org) / OpenMapTiles (© OpenStreetMap contributors), satellite imagery from Esri World Imagery, and the rail overlay from OpenRailwayMap (CC-BY-SA).
