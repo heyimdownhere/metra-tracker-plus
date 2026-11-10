@@ -118,6 +118,7 @@ button { font: inherit; color: inherit; }
 .picker-label-row .picker-label { margin-bottom: 0; }
 .pick-actions { display: flex; gap: 6px; }
 .home-btn {
+  white-space: nowrap; flex: none;
   display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--border); background: var(--panel-2); color: var(--muted); font-size: 12px; font-weight: 600;
 }
@@ -331,3 +332,37 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
 .setup-card button.primary, #commute-form .btns .primary {
   padding: 8px 14px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-weight: 700; cursor: pointer;
 }
+
+/* ---- home / work / current station on the map ---- */
+.place-marker { cursor: pointer; display: flex; flex-direction: column; align-items: center; }
+/* Home/work always sit above train markers; the current-station ring below them. */
+.maplibregl-marker.place-home, .maplibregl-marker.place-work { z-index: 4; }
+.maplibregl-marker.place-current { z-index: 3; }
+.maplibregl-marker.train-marker { z-index: 2; }
+.place-pin {
+  width: 34px; height: 34px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  display: grid; place-items: center; border: 2.5px solid #fff; box-shadow: 0 2px 8px rgba(0, 0, 0, .55);
+  margin-bottom: 6px;
+}
+.place-pin svg { width: 18px; height: 18px; fill: #fff; transform: rotate(45deg); }
+.place-home .place-pin { background: #2f7cf6; }
+.place-work .place-pin { background: #e8930c; }
+.place-label {
+  order: -1; margin-bottom: 4px; padding: 2px 8px; border-radius: 999px; white-space: nowrap;
+  font-size: 12px; background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.place-home .place-label b { color: #2f7cf6; }
+.place-work .place-label b { color: #c97a00; }
+[data-theme="dark"] .place-home .place-label b { color: #6aa5ff; }
+[data-theme="dark"] .place-work .place-label b { color: #ffb84d; }
+.place-ring {
+  width: 30px; height: 30px; border-radius: 50%; border: 4px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  animation: place-pulse 2s ease-out infinite;
+}
+@keyframes place-pulse {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); }
+  100% { box-shadow: 0 0 0 14px transparent; }
+}
+.commute-ctl svg { width: 16px; height: 16px; fill: currentColor; }
+[data-theme="dark"] .commute-ctl svg { fill: #fff; }

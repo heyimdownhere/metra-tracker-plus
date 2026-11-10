@@ -260,7 +260,21 @@
     return "";
   }
 
+  // Home / work / current-station markers on the map.
+  function syncMapPlaces() {
+    const pick = (id) => {
+      const st = id && state.stationById.get(id);
+      return st ? { id: st.id, name: st.name, lat: st.lat, lon: st.lon } : null;
+    };
+    return mapView.setPlaces({
+      home: pick(state.home.home_station),
+      work: pick(state.home.work_station),
+      current: pick(state.station),
+    });
+  }
+
   function updateHomeUi() {
+    if (state.stations.length) syncMapPlaces();
     const p = state.home;
     const homeBtn = $("home-btn"), workBtn = $("work-btn"), go = $("go-home-btn");
     homeBtn.hidden = workBtn.hidden = !state.station;
@@ -621,6 +635,8 @@
     toPicker.sync();
     if (state.station && state.stationById.has(state.station)) selectStation(state.station, { pan: false });
     else { state.station = null; refreshDepartures(); }
+    // Open the map framed on your commute rather than the whole system.
+    syncMapPlaces().then(() => mapView.fitPlaces(false));
     refreshTrains();
     refreshAlerts();
 

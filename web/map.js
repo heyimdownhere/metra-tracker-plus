@@ -309,11 +309,92 @@
       }
     }
 
+    // ---- home / work / current station markers ----------------------------
+    const HOUSE = '<path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/>';
+    const CASE = '<path d="M9 3h6a2 2 0 0 1 2 2v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2Zm0 4h6V5H9v2Z"/>';
+    const placeMarkers = {};
+    let places = {};
+
+    function placeEl(kind, label, name) {
+      const el = document.createElement("div");
+      el.className = `place-marker place-${kind}`;
+      el.setAttribute("role", "button");
+      el.setAttribute("aria-label", `${label}: ${name}`);
+      if (kind === "current") {
+        el.innerHTML = '<span class="place-ring"></span>';
+      } else {
+        el.innerHTML = `<span class="place-pin"><svg viewBox="0 0 24 24" aria-hidden="true">${kind === "home" ? HOUSE : CASE}</svg></span>`
+          + `<span class="place-label"><b>${label}</b> ${name.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]))}</span>`;
+      }
+      return el;
+    }
+
+    /** places: {home: {id,name,lat,lon}|null, work: ...|null, current: ...|null} */
+    async function setPlaces(next) {
+      await ready;
+      for (const kind of ["current", "home", "work"]) {
+        const p = next[kind];
+        // The ring only marks a station that isn't already shown as home/work.
+        const hidden = !p || (kind === "current" && [next.home, next.work].some((q) => q && q.id === p.id));
+        const prev = places[kind];
+        if (hidden) {
+          if (placeMarkers[kind]) { placeMarkers[kind].remove(); delete placeMarkers[kind]; }
+          continue;
+        }
+        if (placeMarkers[kind] && prev && prev.id === p.id) continue;
+        if (placeMarkers[kind]) placeMarkers[kind].remove();
+        const label = kind === "home" ? "Home" : kind === "work" ? "Work" : "";
+        const el = placeEl(kind, label, p.name);
+        el.addEventListener("click", (e) => { e.stopPropagation(); onStationClick(p.id); });
+        placeMarkers[kind] = new maplibregl.Marker({
+          element: el, anchor: kind === "current" ? "center" : "bottom", pitchAlignment: "viewport", rotationAlignment: "viewport",
+        }).setLngLat([p.lon, p.lat]).addTo(map);
+      }
+      places = next;
+      commuteCtl.update();
+    }
+
+    /** Frame home and work (or whichever is set). Returns false if neither is set. */
+    function fitPlaces(animate = true) {
+      const pts = [places.home, places.work].filter(Boolean);
+      if (!pts.length) return false;
+      if (pts.length === 1) {
+        map.flyTo({ center: [pts[0].lon, pts[0].lat], zoom: 12.5, duration: animate ? 800 : 0 });
+      } else {
+        const b = new maplibregl.LngLatBounds();
+        pts.forEach((p) => b.extend([p.lon, p.lat]));
+        // Room for the pins + labels above each point, and the info bar at the bottom.
+        const h = map.getContainer().clientHeight;
+        const pad = { top: Math.min(110, h * 0.25), bottom: Math.min(80, h * 0.2), left: 70, right: 70 };
+        map.fitBounds(b, { padding: pad, maxZoom: 13, duration: animate ? 800 : 0 });
+      }
+      return true;
+    }
+
+    // Map button: jump back to your commute.
+    const commuteCtl = {
+      el: null,
+      onAdd() {
+        const wrap = document.createElement("div");
+        wrap.className = "maplibregl-ctrl maplibregl-ctrl-group";
+        wrap.innerHTML = `<button type="button" class="commute-ctl" title="Show my commute" aria-label="Show my commute"><svg viewBox="0 0 24 24" aria-hidden="true">${HOUSE}</svg></button>`;
+        wrap.querySelector("button").addEventListener("click", () => fitPlaces(true));
+        this.el = wrap;
+        this.update();
+        return wrap;
+      },
+      onRemove() { this.el.remove(); },
+      update() { if (this.el) this.el.hidden = !(places.home || places.work); },
+    };
+    map.addControl(commuteCtl, "top-left");
+
     return {
       map,
       setLines,
       setStations,
       updateTrains,
+      setPlaces,
+      fitPlaces,
       flyTo(lat, lon) { map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 12.5), duration: 800 }); },
       onThemeChange() { ready.then(() => applyBasemap()); },
       get lastTrains() { return lastTrains; },
