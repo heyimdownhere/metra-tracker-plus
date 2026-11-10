@@ -99,12 +99,23 @@ cp .env.example .env    # then edit .env: API key, stations, port...
 docker compose up -d
 ```
 
+## The map
+
+The map is **self-hosted**. On first start, the server downloads a Chicago-area extract of the OpenStreetMap map from [Protomaps](https://protomaps.com) into `/config/map/` (one file, a few hundred MB at the default detail), plus the label fonts and icons. It refreshes about monthly. the server then serves map tiles itself, so phones never load map data from outside servers. It's a normal tiled map: zoomed out, your phone loads a few low-detail tiles; zooming in, it loads sharper tiles only for the area on screen.
+
+Backgrounds (layers button, top right):
+- **Map (matches theme)** (default), **Map: light**, **Map: dark**: the server's map.
+- **Streets (online, OpenFreeMap)** and **Satellite (online, Esri)**: optional online maps.
+- **Simple**: no map at all, just the Metra lines.
+
+**Fallbacks:** while the server's map is still downloading (progress shows in the layers panel), or if the download failed, the map options use the matching free online map (OpenFreeMap). If that can't load either, they use **Simple**. Once the server has its map, nothing is loaded from outside.
+
 ## Phone data use
 
 The server does all the talking to Metra; your phone only downloads small summaries from the server:
 - Responses are gzip-compressed. The map library is about 276 KB on first load (cached afterwards), and the train list about 3 KB every 30 s.
 - The app stops refreshing when it's in the background or the phone is locked, and refreshes straight away when you come back.
-- Map tiles are the largest download. The 3D buildings layer uses the most; turn it off in map settings if data matters.
+- Map tiles come from the server, are cached by the phone, and only cover what's on screen. 3D buildings add the most; turn them off in map settings if data matters.
 
 ## Configuration
 
@@ -125,6 +136,11 @@ Everything is optional; with nothing set the app runs schedule-only and asks for
 | `STATIC_CHECK_INTERVAL` | `300` | Seconds between checks for a new schedule (60–86400). |
 | `PORT` | `8080` | Port the app listens on **inside** the container. To change the port you open in the browser, change the host side of the port mapping instead (Unraid "Web UI port", compose `WEB_PORT`). |
 | `HOST` | `0.0.0.0` | Address the app listens on inside the container. |
+| `MAP_DOWNLOAD` | `true` | Download the self-hosted map to the server (see "The map" below). `false` skips it. |
+| `MAP_MAX_ZOOM` | `15` | Most detailed map level to download (8–15). `14` is roughly a quarter of the size. |
+| `MAP_REFRESH_DAYS` | `30` | Re-download the map after this many days (`0` = never). |
+| `MAP_SOURCE` | *(latest Protomaps build)* | Advanced: extract from this `.pmtiles` URL instead. |
+| `MAP_BBOX` | Metra area | Advanced: `min_lon,min_lat,max_lon,max_lat` to download. |
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`. |
 | `CONFIG_DIR` | `/config` | Where the schedule cache, history and settings live (mount your appdata here). |
 

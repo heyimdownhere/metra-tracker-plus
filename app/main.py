@@ -15,10 +15,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .basemap import BaseMap
 from .config import load_settings, parse_switch_time, parse_work_days
 from .tracker import AmbiguousStation, Tracker, normalize_direction
 from .user_settings import UserSettings
@@ -29,6 +30,20 @@ logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s 
 log = logging.getLogger("metra")
 tracker = Tracker(settings)
 user_settings = UserSettings(settings.config_dir / "settings.json")
+basemap = BaseMap(settings.config_dir, enabled=settings.map_download, source=settings.map_source,
+                  bbox=settings.map_bbox, max_zoom=settings.map_max_zoom, refresh_days=settings.map_refresh_days)
+
+
+async def _map_loop():
+    """Download the self-hosted map on first start, then refresh it now and then."""
+    import asyncio
+    await asyncio.sleep(5)  # let the schedule download go first
+    while True:
+        if basemap.needs_download():
+            await asyncio.to_thread(basemap.download)
+            await asyncio.sleep(3600 if basemap.error else 6 * 3600)
+        else:
+            await asyncio.sleep(6 * 3600)
 
 
 _warned: set[str] = set()
@@ -105,7 +120,10 @@ async def lifespan(_: FastAPI):
     for warning in settings.warnings:
         log.warning("Config: %s", warning)
     await tracker.start()
+    import asyncio
+    map_task = asyncio.create_task(_map_loop(), name="map")
     yield
+    map_task.cancel()
     await tracker.stop()
 
 
@@ -138,7 +156,7 @@ def health():
 
 @app.get("/api/status")
 def status():
-    return _json(tracker.status())
+    return _json({**tracker.status(), "map": basemap.status()})
 
 
 @app.get("/api/stations")
@@ -365,6 +383,35 @@ def lines():
     data = tracker.lines_geojson()
     version = tracker.static.version if tracker.static else ""
     return JSONResponse(data, headers={"Cache-Control": "public, max-age=300", "X-GTFS-Version": version})
+
+
+# ---- self-hosted map ---------------------------------------------------------------
+@app.get("/api/map")
+def map_status():
+    """Self-hosted map: state (ready/downloading/missing/error/disabled), size, progress."""
+    return _json(basemap.status())
+
+
+@app.get("/map/tiles/{z}/{x}/{y}.mvt", include_in_schema=False)
+def map_tile(z: int, x: int, y: int):
+    data, encoding = basemap.tile(z, x, y)
+    if data is None:
+        return Response(status_code=204, headers={"Cache-Control": "public, max-age=86400"})
+    headers = {"Cache-Control": "public, max-age=86400"}
+    if encoding:
+        headers["Content-Encoding"] = encoding  # already compressed; GZipMiddleware leaves it alone
+    return Response(data, media_type="application/vnd.mapbox-vector-tile", headers=headers)
+
+
+@app.get("/map/assets/{path:path}", include_in_schema=False)
+def map_asset(path: str):
+    """Label fonts and icon sprites, fetched once by the server and cached in /config/map."""
+    file = basemap.asset(path)
+    if file is None:
+        raise HTTPException(404, "Not available")
+    media = ("application/x-protobuf" if path.endswith(".pbf")
+             else "application/json" if path.endswith(".json") else "image/png")
+    return FileResponse(file, media_type=media, headers={"Cache-Control": "public, max-age=604800"})
 
 
 @app.get("/", include_in_schema=False)

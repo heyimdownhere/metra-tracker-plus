@@ -5,7 +5,7 @@
 
   const SETTINGS_KEY = "metra.map";
   const DEFAULTS = {
-    basemap: "simple",     // simple | streets | light | dark | satellite
+    basemap: "auto",       // auto | light | dark | simple | satellite
     basemapOpacity: 100,
     rail: false,           // OpenRailwayMap track overlay
     railOpacity: 70,
@@ -18,40 +18,43 @@
     lines: true,
   };
 
-  // Backgrounds. "simple" is the app's own background: no outside map service,
-  // no key and no extra data. The others are free and need no API key:
-  // OpenFreeMap vector styles and Esri satellite imagery. Each style URL list
-  // is tried in order; if all fail, the map falls back to "simple".
+  // Backgrounds. The map ones are served by the server itself from a Chicago-area
+  // OpenStreetMap extract it downloads once (see app/basemap.py), so the
+  // browser never contacts a map server for them. "simple" needs no map at
+  // all. Satellite is the only online option and is labelled as such.
+  // If the server's map isn't available yet, the map ones fall back to the matching
+  // online OpenFreeMap style (free, no key), and to "simple" if that fails too.
   const OFM = (name) => `https://tiles.openfreemap.org/styles/${name}`;
+  const ONLINE = { light: [OFM("positron")], dark: [OFM("dark"), OFM("fiord")] };
   const BASEMAPS = {
-    simple: { label: "Simple (no map data)" },
-    streets: { label: "Streets", styles: [OFM("liberty"), OFM("bright")], light: true },
-    light: { label: "Light", styles: [OFM("positron")], light: true },
-    dark: { label: "Dark", styles: [OFM("dark"), OFM("fiord")] },
+    auto: { label: "Map (matches theme)", local: "auto" },
+    light: { label: "Map: light", local: "light", light: true },
+    dark: { label: "Map: dark", local: "dark" },
+    streets: { label: "Streets (online, OpenFreeMap)", styles: [OFM("liberty"), OFM("bright")], light: true },
+    simple: { label: "Simple (no map)" },
     satellite: {
-      label: "Satellite",
+      label: "Satellite (online, Esri)",
       raster: {
         tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
         attribution: "Imagery &copy; Esri, Maxar, Earthstar Geographics",
       },
     },
   };
+  const MAP_ATTR = 'Map: <a href="https://protomaps.com" target="_blank" rel="noopener">Protomaps</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>';
   // Railway infrastructure overlay (tracks, yards, stations) from OpenStreetMap.
   const RAIL_OVERLAY = {
     tiles: ["a", "b", "c"].map((s) => `https://${s}.tiles.openrailwaymap.org/standard/{z}/{x}/{y}.png`),
     attribution: 'Rail overlay: <a href="https://www.openrailwaymap.org/" target="_blank" rel="noopener">OpenRailwayMap</a> (CC-BY-SA)',
   };
-  // OpenMapTiles-schema vector tiles (free, no API key) used only for 3D buildings.
   const LOOP = [-87.6345, 41.8812];
-  const BUILDINGS_TILEJSON = "https://tiles.openfreemap.org/planet";
-  const BUILDINGS_ATTR = '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://www.openmaptiles.org/" target="_blank" rel="noopener">OpenMapTiles</a>';
 
   function loadSettings() {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"); } catch (e) { /* ignore */ }
     const s = { ...DEFAULTS, ...saved };
-    // Older versions had "auto"/"none" (and CARTO maps that now need a key).
-    if (!BASEMAPS[s.basemap] || s.basemap === "auto" || s.basemap === "none") s.basemap = "simple";
+    // Older versions had "none": map it onto today's options.
+    if (s.basemap === "none") s.basemap = "simple";
+    if (!BASEMAPS[s.basemap]) s.basemap = "auto";
     return s;
   }
 
@@ -62,6 +65,28 @@
     const save = () => localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 
     const themeBg = () => (isLight() ? "#eef1f5" : "#0f1216");
+
+    const origin = window.location.origin;
+    const localReady = () => !!(mapStatus && mapStatus.available);
+    const flavorFor = (name) => (BASEMAPS[name].local === "auto" ? (isLight() ? "light" : "dark") : BASEMAPS[name].local);
+
+    // A full map style whose tiles, fonts and icons all come from the server.
+    function localStyle(flavor) {
+      return {
+        version: 8,
+        glyphs: `${origin}/map/assets/fonts/{fontstack}/{range}.pbf`,
+        sprite: `${origin}/map/assets/sprites/v4/${flavor}`,
+        sources: {
+          protomaps: {
+            type: "vector",
+            tiles: [`${origin}/map/tiles/{z}/{x}/{y}.mvt`],
+            maxzoom: (mapStatus && mapStatus.max_zoom) || 15,
+            attribution: MAP_ATTR,
+          },
+        },
+        layers: basemaps.layers("protomaps", basemaps.namedFlavor(flavor), { lang: "en" }),
+      };
+    }
 
     // A style made only of our background (plus satellite imagery if chosen).
     function ownStyle(name) {
@@ -98,7 +123,9 @@
     let linesData = { type: "FeatureCollection", features: [] };
     let stationsData = { type: "FeatureCollection", features: [] };
     let currentBase = "simple";
-    let attempt = null;  // {name, index, url, timer} while a background style loads
+    let mapStatus = null;  // the server's map: {state, available, max_zoom, progress, ...} from /api/status
+    let attempt = null;    // {target, urls, index, timer} while an online style loads
+    const failedOnline = new Set();  // online targets that couldn't load (not retried until you pick again)
 
     // ---- apply settings ----------------------------------------------------
     function activeBasemap() { return currentBase; }
@@ -119,32 +146,97 @@
       }
     }
 
+    // Which style should be shown for a chosen background right now:
+    // the server's map -> online fallback -> simple.
+    function resolved(name) {
+      const b = BASEMAPS[name] || BASEMAPS.auto;
+      if (b.local) {
+        const flavor = flavorFor(name);
+        if (localReady()) return `local-${flavor}`;
+        // Until the server says whether it has the map, don't reach for the online one.
+        if (mapStatus === null) return "simple";
+        const online = `online-${flavor}`;
+        return failedOnline.has(online) ? "simple" : online;
+      }
+      if (b.styles) return failedOnline.has(`online-${name}`) ? "simple" : `online-${name}`;
+      return BASEMAPS[name] ? name : "simple";
+    }
+
+    function onlineUrls(target) {
+      const key = target.slice(7);
+      return ONLINE[key] || (BASEMAPS[key] && BASEMAPS[key].styles) || [];
+    }
+
     // Switch the background. Overlays are re-added on "style.load".
-    function setBasemap(name, index = 0) {
-      if (attempt) clearTimeout(attempt.timer);
-      attempt = null;
-      const b = BASEMAPS[name] || BASEMAPS.simple;
-      if (!b.styles) {
-        currentBase = BASEMAPS[name] ? name : "simple";
-        map.setStyle(ownStyle(currentBase), { diff: false });
+    function setBasemap(name) {
+      if (attempt) { clearTimeout(attempt.timer); attempt = null; }
+      const target = resolved(name);
+      currentBase = target;
+      if (target.startsWith("local-")) {
+        try {
+          map.setStyle(localStyle(target.slice(6)), { diff: false });
+          return;
+        } catch (e) {
+          console.warn("map: local style failed", e);
+          currentBase = "simple";
+        }
+      }
+      if (currentBase.startsWith("online-")) {
+        tryOnline(target, onlineUrls(target), 0);
         return;
       }
-      if (index >= b.styles.length) {
-        console.warn(`map: "${name}" background unavailable; using Simple`);
-        showNote(`${b.label} map couldn't load; showing Simple instead`);
-        setBasemap("simple");
+      map.setStyle(ownStyle(currentBase === "satellite" ? "satellite" : "simple"), { diff: false });
+    }
+
+    function tryOnline(target, urls, index) {
+      if (index >= urls.length) {
+        failedOnline.add(target);
+        attempt = null;
+        currentBase = "simple";
+        console.warn(`map: ${target} unavailable; using Simple`);
+        showNote("Online map couldn't load; showing Simple instead");
+        map.setStyle(ownStyle("simple"), { diff: false });
         return;
       }
-      currentBase = name;
-      const url = b.styles[index];
-      attempt = { name, index, url, timer: setTimeout(() => fallback(url), 12000) };
+      const url = urls[index];
+      attempt = { target, urls, index, url, timer: setTimeout(() => onlineFailed(url), 12000) };
       map.setStyle(url, { diff: false });
     }
 
-    function fallback(url) {
+    function onlineFailed(url) {
       if (!attempt || attempt.url !== url) return;
-      const { name, index } = attempt;
-      setBasemap(name, index + 1);
+      clearTimeout(attempt.timer);
+      const { target, urls, index } = attempt;
+      tryOnline(target, urls, index + 1);
+    }
+
+    // Called with the server's map status; switches to the map once it's downloaded.
+    function setMapStatus(st) {
+      mapStatus = st || null;
+      syncBasemap();
+      updateMapStatusLine();
+    }
+
+    // Show whatever the chosen background resolves to now (e.g. the map once the server has it).
+    function syncBasemap() {
+      ready.then(() => { if (resolved(settings.basemap) !== currentBase) setBasemap(settings.basemap); });
+    }
+
+    function updateMapStatusLine() {
+      const el = document.getElementById("map-dl-status");
+      if (!el) return;
+      const st = mapStatus;
+      let text = "";
+      if (!st) text = "";
+      else if (st.state === "downloading") {
+        const p = st.progress || {};
+        const pct = p.stage === "tiles" && p.total ? ` ${Math.round((100 * p.done) / p.total)}%` : "";
+        text = `the server is downloading the map${pct}. Using the online map (or Simple) until it's ready.`;
+      } else if (st.state === "ready") text = `Map stored on the server (${Math.round((st.size || 0) / 1e6)} MB).`;
+      else if (st.state === "error") text = `Map download failed: ${st.error}. Using the online map (or Simple); it will retry.`;
+      else if (st.state === "disabled") text = "Map download is turned off (MAP_DOWNLOAD=false).";
+      else text = "Map not downloaded yet.";
+      el.textContent = text;
     }
 
     function showNote(text) {
@@ -156,7 +248,8 @@
 
     function buildingColor() {
       const active = activeBasemap();
-      const light = (BASEMAPS[active] && BASEMAPS[active].light) || (active === "simple" && isLight());
+      const light = active === "local-light" || active === "online-light" || active === "online-streets"
+        || (active === "simple" && isLight());
       return [
         "interpolate", ["linear"], ["coalesce", ["get", "render_height"], 0],
         0, light ? "#d6dbe2" : "#2a3340",
@@ -166,18 +259,28 @@
 
     function ensureBuildings() {
       if (buildingsAdded) return;
+      // Buildings come from the server's map too; without it there are none to show.
+      let source = "protomaps";
+      if (!map.getSource("protomaps")) {
+        if (!localReady()) return;
+        source = "buildings-src";
+        map.addSource(source, {
+          type: "vector", tiles: [`${origin}/map/tiles/{z}/{x}/{y}.mvt`],
+          maxzoom: (mapStatus && mapStatus.max_zoom) || 15, attribution: MAP_ATTR,
+        });
+      }
       buildingsAdded = true;
-      map.addSource("omt", { type: "vector", url: BUILDINGS_TILEJSON, attribution: BUILDINGS_ATTR });
       map.addLayer({
         id: "buildings-3d",
         type: "fill-extrusion",
-        source: "omt",
-        "source-layer": "building",
+        source,
+        "source-layer": "buildings",
         minzoom: 13,
         paint: {
           "fill-extrusion-color": buildingColor(),
-          "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 13, 0, 14.5, ["coalesce", ["get", "render_height"], 6]],
-          "fill-extrusion-base": ["coalesce", ["get", "render_min_height"], 0],
+          "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 13, 0, 14.5,
+            ["coalesce", ["get", "height"], ["get", "render_height"], 8]],
+          "fill-extrusion-base": ["coalesce", ["get", "min_height"], ["get", "render_min_height"], 0],
           "fill-extrusion-opacity": settings.buildingOpacity / 100,
         },
       }, map.getLayer("lines") ? "lines" : undefined);
@@ -258,11 +361,10 @@
     map.on("error", (e) => {
       const err = e && e.error;
       console.warn("map:", err ? err.message : e);
-      // A background style that fails to load: try the next one / fall back.
-      if (attempt && err && (err.url === attempt.url || String(err.message || "").includes(attempt.url))) fallback(attempt.url);
+      // An online style that fails to load: try the next one, then Simple.
+      if (attempt && err && (err.url === attempt.url || String(err.message || "").includes(attempt.url))) onlineFailed(attempt.url);
     });
-    // Load the saved background once the map exists.
-    ready.then(() => { if (settings.basemap !== "simple") setBasemap(settings.basemap); });
+    syncBasemap();  // e.g. a saved Satellite choice
 
     // ---- settings panel ----------------------------------------------------
     function buildPanel() {
@@ -273,6 +375,7 @@
         <h3>Map</h3>
         <label class="row"><span>Basemap</span>
           <select data-k="basemap">${basemapOpts.map(([v, l]) => `<option value="${v}">${l}</option>`).join("")}</select></label>
+        <p class="hint" id="map-dl-status"></p>
         <label class="row slider"><span>Basemap opacity</span><input type="range" min="0" max="100" step="5" data-k="basemapOpacity"><output></output></label>
         <label class="row check"><input type="checkbox" data-k="rail"><span>Railway tracks overlay</span></label>
         <label class="row slider"><span>Tracks opacity</span><input type="range" min="10" max="100" step="5" data-k="railOpacity"><output></output></label>
@@ -300,6 +403,7 @@
         // Nothing to fade on the Simple background.
         const op = panel.querySelector('[data-k="basemapOpacity"]');
         op.disabled = settings.basemap === "simple";
+        updateMapStatusLine();
         op.closest(".row").classList.toggle("disabled", op.disabled);
       };
       sync();
@@ -310,7 +414,7 @@
         settings[k] = el.type === "checkbox" ? el.checked : el.type === "range" ? Number(el.value) : el.value;
         save();
         sync();
-        if (k === "basemap") ready.then(() => setBasemap(settings.basemap));
+        if (k === "basemap") { failedOnline.clear(); ready.then(() => setBasemap(settings.basemap)); }
         else ready.then(() => applyAll(k === "buildings"));
       });
       panel.addEventListener("click", (e) => {
@@ -477,7 +581,13 @@
       setPlaces,
       fitPlaces,
       flyTo(lat, lon) { map.flyTo({ center: [lon, lat], zoom: Math.max(map.getZoom(), 12.5), duration: 800 }); },
-      onThemeChange() { ready.then(() => applyBasemap()); },
+      onThemeChange() {
+        ready.then(() => {
+          if (resolved(settings.basemap) !== currentBase) setBasemap(settings.basemap);
+          else applyBasemap();
+        });
+      },
+      setMapStatus,
       get lastTrains() { return lastTrains; },
     };
   }

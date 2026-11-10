@@ -594,6 +594,7 @@
     }
     $("data-version").textContent = s.static_version ? `Schedule version: ${s.static_version}.` : "";
     if (s.static_loaded && state.stations.length) refreshProfile();
+    mapView.setMapStatus(s.map);
     return s.static_loaded;
   }
 

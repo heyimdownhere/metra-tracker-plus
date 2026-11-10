@@ -131,6 +131,11 @@ class Settings:
     commute_switch_time: str = DEFAULT_SWITCH_TIME
     work_days: tuple[int, ...] = DEFAULT_WORK_DAYS
     log_level: str = "INFO"
+    map_download: bool = True
+    map_source: str | None = None
+    map_max_zoom: int = 15
+    map_bbox: tuple[float, float, float, float] = (-88.75, 41.30, -87.40, 42.70)
+    map_refresh_days: int = 30
     warnings: tuple[str, ...] = field(default=(), compare=False)
 
     @property
@@ -155,6 +160,7 @@ class Settings:
             f"  WORK_STATION          {self.work_station or '(not set)'}",
             f"  COMMUTE_SWITCH_TIME   {self.commute_switch_time}",
             f"  WORK_DAYS             {','.join(DAY_NAMES[d] for d in self.work_days) or '(none)'}",
+            f"  MAP_DOWNLOAD          {'on' if self.map_download else 'off'} (zoom 0-{self.map_max_zoom}, refresh every {self.map_refresh_days} days)",
             f"  LOG_LEVEL             {self.log_level}",
         ]
         return "Settings:\n" + "\n".join(lines)
@@ -172,6 +178,20 @@ def load_settings() -> Settings:
     if work_days is None:
         warnings.append(f"WORK_DAYS={days_raw!r} isn't like 'mon-fri' or 'mon,wed,fri'; using mon-fri")
         work_days = DEFAULT_WORK_DAYS
+    bbox_raw = _str_env("MAP_BBOX")
+    map_bbox = (-88.75, 41.30, -87.40, 42.70)
+    if bbox_raw:
+        try:
+            parts = tuple(float(v) for v in bbox_raw.split(","))
+            if len(parts) != 4 or not (parts[0] < parts[2] and parts[1] < parts[3]):
+                raise ValueError
+            map_bbox = parts
+        except ValueError:
+            warnings.append(f"MAP_BBOX={bbox_raw!r} isn't min_lon,min_lat,max_lon,max_lat; using the Metra area")
+    map_dl = (_str_env("MAP_DOWNLOAD", "true") or "true").lower()
+    if map_dl not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+        warnings.append(f"MAP_DOWNLOAD={map_dl!r} should be true or false; using true")
+        map_dl = "true"
     level = (_str_env("LOG_LEVEL", "INFO") or "INFO").upper()
     if level not in VALID_LOG_LEVELS:
         warnings.append(f"LOG_LEVEL={level!r} is not one of {', '.join(VALID_LOG_LEVELS)}; using INFO")
@@ -195,5 +215,10 @@ def load_settings() -> Settings:
         commute_switch_time=switch_time,
         work_days=work_days,
         log_level=level,
+        map_download=map_dl in ("true", "1", "yes", "on"),
+        map_source=_str_env("MAP_SOURCE"),
+        map_max_zoom=_int_env("MAP_MAX_ZOOM", 15, 8, 15, warnings),
+        map_bbox=map_bbox,
+        map_refresh_days=_int_env("MAP_REFRESH_DAYS", 30, 0, 3650, warnings),
         warnings=tuple(warnings),
     )

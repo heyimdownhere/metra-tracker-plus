@@ -19,7 +19,9 @@ Updated 2026-11-09. The app runs against Metra's **real** schedule and **live** 
 
 Map tiles were blocked in the dev sandbox, so these have never been seen drawing:
 
-- [ ] Map backgrounds (layers button): Streets, Light, Dark (OpenFreeMap) and Satellite (Esri), plus the tracks overlay (OpenRailwayMap). These couldn't be reached from the dev sandbox; the fallback to Simple was tested.
+- [ ] **Self-hosted map:** after deploying, watch the container log for "Map: extracting Chicago area…" then "Map: saved N MB". The layers panel shows progress. This first real download is untested: the dev sandbox couldn't reach Protomaps, though the whole pipeline was tested against a local test archive. If the latest-build lookup fails, set `MAP_SOURCE` to a specific `https://build.protomaps.com/YYYYMMDD.pmtiles`.
+- [ ] Check the map looks right (labels, icons, light/dark), how big the file is, and 3D buildings from the local map (their heights come from the map's `height` field; unverified).
+- [ ] Online options and fallbacks: Streets (OpenFreeMap), Satellite (Esri), tracks overlay (OpenRailwayMap). The fallback to Simple was tested; the online maps themselves couldn't be reached from the sandbox.
 - [ ] 3D buildings (OpenFreeMap) in the Loop, in dark and light mode, and phone performance with them on.
 - [ ] Estimated train positions (schedule-only mode) sit on the lines, especially the ME and RI branches.
 - [ ] Refresh the README screenshots once the map tiles show (current ones have a blank map background).
@@ -62,6 +64,7 @@ Over the first days and weeks:
 - **Home + work commute**: work station, switch time (presets Noon–7 PM) and workdays. On workdays the app opens on home → work before the switch time and work → home after; other days on the home board. Settable in the app (briefcase button with searchable station pickers, "Set as home" / "Set as work") or by env (`HOME_STATION`, `WORK_STATION`, `COMMUTE_SWITCH_TIME`, `WORK_DAYS`). App-saved values win; unset ones fall back to env. A fresh install shows a "Set up your commute" card. Adds `/api/now` and `/api/work`.
 
 **Board and map**
+- **Self-hosted map**: the server downloads a Chicago-area OpenStreetMap extract (Protomaps) by range requests, serves tiles, fonts and icons itself, and refreshes it monthly. Tested end-to-end against a local test archive (the extract is tile-for-tile exact; with the map present the browser makes zero outside requests). Fallback chain: the server map → OpenFreeMap → Simple.
 - Map background switched from CARTO (now needs an API key) to **Simple**, the app's own background with no outside service, key or extra data, as the default. Optional free, no-key backgrounds: OpenFreeMap Streets/Light/Dark and Esri Satellite, with automatic fallback to Simple if one can't load.
 - Home, work and switch time are saved on the server (`/config/settings.json`) and survive restarts and updates (verified).
 - Home and work shown on the map as labelled pins (blue house, amber briefcase) that sit above trains, a pulsing ring on the station you're viewing, the map opening framed on your commute, and a "show my commute" map button.
