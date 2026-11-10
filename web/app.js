@@ -462,7 +462,6 @@
     if (!draft.home) setTimeout(() => $("cm-home").focus(), 50);
   }
 
-  $("commute-btn").addEventListener("click", openCommute);
   $("commute-cancel").addEventListener("click", () => $("commute-dialog").close());
   $("commute-form").addEventListener("submit", async (e) => {
     e.preventDefault();

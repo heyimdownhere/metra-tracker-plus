@@ -12,7 +12,7 @@ Updated 2026-11-09. The app runs against Metra's **real** schedule and **live** 
   - Leave **Web UI port** at 8080 unless that port is taken.
 - [ ] Click **Apply**, then check the container log. It starts with a settings summary (API key masked) and warns about any value it couldn't use.
 - [ ] Open `http://SERVER-IP:8080`. Check that the status pill shows **Live**, the WebUI button works, and Docker health shows **healthy**.
-- [ ] If home and work weren't set in Unraid, use the **Set up your commute** card or the briefcase button.
+- [ ] If home and work weren't set in Unraid, use the **Set up your commute** card or ⚙ Settings → Edit commute.
 - [ ] Check that `/mnt/user/appdata/metra-tracker/` contains `gtfs/`, `history.db` and `settings.json`, and that a restart is fast.
 
 ## 2. Check in real use

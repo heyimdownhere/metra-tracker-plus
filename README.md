@@ -66,7 +66,7 @@ GitHub builds and publishes a ready-to-run image (`ghcr.io/heyimdownhere/metra-t
 2. **Create the container.** In the Unraid web UI, go to **Docker → Add Container**. In the **Template** dropdown (under *User templates*), choose **metra-tracker-plus**.
 3. **Fill in the fields:**
    - **Metra API key**: paste your key (the field is masked). Leave it empty to run schedule-only.
-   - **Home station / Work station / Commute switch time / Workdays**: optional. You can leave these empty and set them in the app instead (briefcase button). Stations can be an id (`EVANSTON`, `OTC`) or a name.
+   - **Home station / Work station / Commute switch time / Workdays**: optional. You can leave these empty and set them in the app instead (⚙ Settings → Edit commute). Stations can be an id (`EVANSTON`, `OTC`) or a name.
    - **Web UI port**: 8080, unless that's taken on the server.
    - **Appdata**: `/mnt/user/appdata/metra-tracker` (default).
    - More options (history days, poll interval, log level) are under **Show more settings**.
@@ -145,7 +145,7 @@ Everything is optional; with nothing set the app runs schedule-only and asks for
 | `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING` or `ERROR`. |
 | `CONFIG_DIR` | `/config` | Where the schedule cache, history and settings live (mount your appdata here). |
 
-**Home, work, switch time and workdays can also be set in the app**: tap the briefcase (top right), or "Set as home" / "Set as work" next to the station field. Values saved in the app win over the environment; anything left unset in the app falls back to the environment. On a fresh install with nothing set, the board shows a "Set up your commute" card.
+**Home, work, switch time and workdays can also be set in the app**: open ⚙ Settings (top right) → Edit commute, or "Set as home" / "Set as work" next to the station field. Values saved in the app win over the environment; anything left unset in the app falls back to the environment. On a fresh install with nothing set, the board shows a "Set up your commute" card.
 
 A weekday has about 11,500 train-stop events, so history grows by roughly 3 MB a day while realtime is on (about 1 GB for a full year). Rows older than `HISTORY_DAYS` are pruned every 6 hours.
 
