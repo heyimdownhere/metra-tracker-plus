@@ -1079,8 +1079,47 @@ class Tracker:
                 })
         return rows
 
-    def trains(self, now: float | None = None) -> dict:
+    def trains(self, now: float | None = None, to: str | None = None, frm: str | None = None) -> dict:
+        """Trains for the map. With `to`, only trains that will still stop at that station;
+        with `frm` too, only those running from `frm` toward `to` (your direction of travel)."""
         now = time.time() if now is None else now
+        result = self._all_trains(now)
+        if not to or not self.static:
+            return result
+        dest = set(self.static.station_children.get(to) or ([to] if to in self.static.stops else []))
+        if not dest:
+            raise KeyError(to)
+        origin = None
+        if frm:
+            origin = set(self.static.station_children.get(frm) or ([frm] if frm in self.static.stops else []))
+            if not origin:
+                raise KeyError(frm)
+        keep = [t for t in result["trains"] if self._will_stop_at(t.get("trip_id"), dest, now, origin)]
+        return {**result, "to": to, "from": frm, "trains": keep}
+
+    def _will_stop_at(self, trip_id: str | None, dest: set[str], now: float, origin: set[str] | None = None) -> bool:
+        """Whether a running train still has a stop at one of `dest` ahead of it
+        (and, with `origin`, stops at one of those earlier on the same trip)."""
+        s = self.static
+        if not trip_id or trip_id not in s.trips:
+            return False
+        stops = s.trip_stops.get(trip_id, [])
+        stop = next((x for x in stops if x[S_STOP] in dest), None)
+        if stop is None:
+            return False
+        if origin is not None and not any(x[S_STOP] in origin and x[S_SEQ] < stop[S_SEQ] for x in stops):
+            return False
+        d = s.trip_service_date(trip_id, now)
+        if d is None:
+            return False
+        base = s.service_day_start(d)
+        pred = self._predict(trip_id, stop[S_SEQ], base) if self.realtime_live else None
+        if pred and (pred["skipped"] or pred["cancelled"]):
+            return False
+        t = pred["time"] if pred and pred["time"] else base + stop[S_ARR] + ((pred or {}).get("delay") or 0)
+        return t >= now - 60
+
+    def _all_trains(self, now: float) -> dict:
         if self._trains_cache and now - self._trains_cache[0] < 10:
             # Fresh timestamp: the app uses it to correct the phone's clock.
             return {**self._trains_cache[1], "generated_at": now}

@@ -743,3 +743,16 @@ def test_timetable_lists_rest_of_today_only(tracker):
     # Just after midnight, "today" still means the service day that is ending.
     late = datetime(2026, 11, 10, 1, 0, tzinfo=TZ).timestamp()
     assert datetime.fromtimestamp(tracker.day_end(late), TZ) == datetime(2026, 11, 10, 3, 0, tzinfo=TZ)
+
+
+def test_map_trains_only_those_still_going_to_a_station(tracker):
+    at = datetime(2026, 11, 9, 8, 5, tzinfo=TZ).timestamp()
+    every = {t["trip_id"] for t in tracker.trains(at)["trains"]}
+    assert "t-0800" in every
+    assert "t-0800" in {t["trip_id"] for t in tracker.trains(at, to="B")["trains"]}  # Bravo still ahead
+    assert "t-0800" not in {t["trip_id"] for t in tracker.trains(at, to="A")["trains"]}  # already left Alpha
+    with pytest.raises(KeyError):
+        tracker.trains(at, to="NOPE")
+    # With a From station: only trains running From -> To.
+    assert "t-0800" in {t["trip_id"] for t in tracker.trains(at, to="C", frm="A")["trains"]}
+    assert "t-0800" not in {t["trip_id"] for t in tracker.trains(at, to="A", frm="C")["trains"]}

@@ -200,8 +200,14 @@ def timetable(
 
 
 @app.get("/api/trains")
-def trains():
-    return _json(tracker.trains())
+def trains(
+    to: str | None = Query(None, description="Only trains that will still stop at this station"),
+    frm: str | None = Query(None, alias="from", description="With `to`: only trains running from this station toward `to`"),
+):
+    try:
+        return _json(tracker.trains(to=to or None, frm=frm or None))
+    except KeyError as exc:
+        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
 
 
 @app.get("/api/alerts")

@@ -164,11 +164,14 @@
   async function refreshTrains() {
     if (mapHidden()) return;  // timetable only: no train positions needed
     let data;
-    try { data = await api("/api/trains"); } catch (e) { console.warn(e); return; }
+    // Only trains still heading to your "Going to" stop, unless you chose all trains.
+    const dest = view.mapTrains !== "all" && state.dest && state.stationById.get(state.dest);
+    const from = dest && state.station ? `&from=${encodeURIComponent(state.station)}` : "";
+    try { data = await api(dest ? `/api/trains?to=${encodeURIComponent(state.dest)}${from}` : "/api/trains"); } catch (e) { console.warn(e); return; }
     mapView.updateTrains(data);
     const n = data.trains.length;
     const note = $("map-note");
-    note.textContent = `${n} train${n === 1 ? "" : "s"} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}`;
+    note.textContent = `${n} train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}`;
     note.hidden = false;
   }
 
@@ -283,6 +286,7 @@
     toPicker.sync();
     updateHomeUi();
     refreshDepartures();
+    refreshTrains();
   });
 
   function selectStation(id, opts = {}) {
@@ -297,6 +301,7 @@
     renderAlerts();
     if (opts.pan !== false) mapView.flyTo(st.lat, st.lon);
     refreshDepartures();
+    refreshTrains();
   }
 
   function selectDest(id, opts = {}) {
@@ -305,7 +310,7 @@
     toPicker.sync();
     updateHomeUi();
     renderAlerts();
-    if (opts.refresh !== false) refreshDepartures();
+    if (opts.refresh !== false) { refreshDepartures(); refreshTrains(); }
   }
 
   // ---------- home / work / commute ----------
@@ -636,7 +641,7 @@
   }
 
   // ---------- display options (this device only) ----------
-  const view = { pickers: "show", alerts: "bell", alertLines: "all" };
+  const view = { pickers: "show", alerts: "bell", alertLines: "all", mapTrains: "dest" };
   try { Object.assign(view, JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")); } catch (e) { /* ignore */ }
   // The old "Timetable only" display option is now the Timetable tab.
   if (view.map === "hide" && !localStorage.getItem(TAB_KEY)) localStorage.setItem(TAB_KEY, "timetable");
@@ -683,7 +688,7 @@
   });
 
   $("view-btn").addEventListener("click", () => {
-    for (const k of ["pickers", "alerts", "alertLines"]) {
+    for (const k of ["mapTrains", "pickers", "alerts", "alertLines"]) {
       document.querySelectorAll(`#view-form input[name=${k}]`).forEach((r) => { r.checked = r.value === view[k]; });
     }
     $("view-dialog").showModal();
@@ -692,6 +697,7 @@
     if (!e.target.name) return;
     view[e.target.name] = e.target.value;
     localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+    if (e.target.name === "mapTrains") refreshTrains();
     pickersOpen = false;
     applyView();
   });
