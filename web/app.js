@@ -499,7 +499,7 @@
       const tab = state.tab;
       const d = tab === "timetable"
         ? await api(`/api/timetable?station=${encodeURIComponent(state.station)}${to}`)
-        : await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}&limit=5`);
+        : await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}&limit=${boardCount()}`);
       if (tab !== state.tab) return;  // switched tabs while loading
       d.tab = tab;
       state.departures = d;
@@ -641,7 +641,7 @@
   }
 
   // ---------- display options (this device only) ----------
-  const view = { pickers: "show", alerts: "bell", alertLines: "all", mapTrains: "dest" };
+  const view = { pickers: "show", alerts: "bell", alertLines: "all", mapTrains: "dest", count: "5" };
   try { Object.assign(view, JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")); } catch (e) { /* ignore */ }
   // The old "Timetable only" display option is now the Timetable tab.
   if (view.map === "hide" && !localStorage.getItem(TAB_KEY)) localStorage.setItem(TAB_KEY, "timetable");
@@ -653,6 +653,7 @@
   // ---------- tabs: next trains + map / today's timetable ----------
   state.tab = localStorage.getItem(TAB_KEY) === "timetable" ? "timetable" : "live";
   const mapHidden = () => state.tab === "timetable";
+  const boardCount = () => Math.min(20, Math.max(1, parseInt(view.count, 10) || 5));
   document.querySelectorAll(".tabs [data-tab]").forEach((b) => b.addEventListener("click", () => {
     if (state.tab === b.dataset.tab) return;
     state.tab = b.dataset.tab;
@@ -688,7 +689,7 @@
   });
 
   $("view-btn").addEventListener("click", () => {
-    for (const k of ["mapTrains", "pickers", "alerts", "alertLines"]) {
+    for (const k of ["count", "mapTrains", "pickers", "alerts", "alertLines"]) {
       document.querySelectorAll(`#view-form input[name=${k}]`).forEach((r) => { r.checked = r.value === view[k]; });
     }
     $("view-dialog").showModal();
@@ -698,6 +699,7 @@
     view[e.target.name] = e.target.value;
     localStorage.setItem(VIEW_KEY, JSON.stringify(view));
     if (e.target.name === "mapTrains") refreshTrains();
+    if (e.target.name === "count") refreshDepartures();
     pickersOpen = false;
     applyView();
   });
