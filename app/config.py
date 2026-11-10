@@ -206,7 +206,8 @@ def load_settings() -> Settings:
         realtime_base=_str_env("METRA_REALTIME_BASE", "https://gtfspublic.metrarr.com/gtfs/public").rstrip("/"),
         # Metra asks clients not to poll faster than every 30 seconds.
         realtime_interval=_int_env("REALTIME_INTERVAL", 30, 30, 3600, warnings),
-        static_check_interval=_int_env("STATIC_CHECK_INTERVAL", 300, 60, 86400, warnings),
+        # How often to ask Metra whether a new schedule was published (realtime polling is separate).
+        static_check_interval=_int_env("STATIC_CHECK_INTERVAL", 3600, 60, 86400, warnings),
         # Re-download the whole schedule this often even if Metra says it's unchanged (0 = never).
         static_full_refresh_days=_int_env("STATIC_FULL_REFRESH_DAYS", 7, 0, 365, warnings),
         port=_int_env("PORT", DEFAULT_PORT, 1, 65535, warnings),

@@ -49,7 +49,7 @@ It's light on your phone's data: your home server talks to Metra, and your phone
 
 ### Data and licensing
 
-- Static GTFS comes from `https://schedules.metrarail.com/gtfs/schedule.zip`. The app checks `published.txt` every 5 minutes and reloads when it changes. The parsed result is cached in `/config/gtfs/`, so a restart takes well under a second. Once a week it also re-downloads the whole file in case it changed without `published.txt` changing. A new download is only used if it reads correctly and has trains in the coming week; otherwise the app keeps the schedule it has. The previous schedule is kept as `schedule.prev.zip` and used if the current file is ever unreadable.
+- Static GTFS comes from `https://schedules.metrarail.com/gtfs/schedule.zip`. The app checks `published.txt` every hour and reloads when it changes. The parsed result is cached in `/config/gtfs/`, so a restart takes well under a second. Once a week it also re-downloads the whole file in case it changed without `published.txt` changing. A new download is only used if it reads correctly and has trains in the coming week; otherwise the app keeps the schedule it has. The previous schedule is kept as `schedule.prev.zip` and used if the current file is ever unreadable.
 - GTFS-Realtime (`positions`, `tripupdates`, `alerts`) comes from `https://gtfspublic.metrarr.com/gtfs/public/…` with `Authorization: Bearer $METRA_API_TOKEN`. It is polled every 30 s and never faster.
 - **The browser never contacts Metra.** All Metra requests are made by the server, as Metra's license requires. With the default Simple background the browser loads nothing else either; map tiles (OpenFreeMap, Esri, OpenRailwayMap) are only fetched if you turn on a map background, 3D buildings or the tracks overlay.
 - Trip, service, shape and stop IDs are treated as opaque strings. If realtime trip IDs stop matching the schedule (Metra is changing its ID format), trips are matched by route + start time + active service day instead.
@@ -133,7 +133,7 @@ Everything is optional; with nothing set the app runs schedule-only and asks for
 | `TZ` | `America/Chicago` | Container time zone (logs). The app always uses Metra's Chicago time. |
 | `HISTORY_DAYS` | `365` | Days of delay history to keep (0–3650). `0` disables history. |
 | `REALTIME_INTERVAL` | `30` | Seconds between realtime polls (30–3600). Metra's minimum is 30. |
-| `STATIC_CHECK_INTERVAL` | `300` | Seconds between checks for a new schedule (60–86400). |
+| `STATIC_CHECK_INTERVAL` | `3600` | Seconds between checks for a new schedule (60–86400); default hourly. Doesn't affect the 30-second train updates. |
 | `STATIC_FULL_REFRESH_DAYS` | `7` | Re-download the whole schedule this often even if Metra says it hasn't changed (0 turns it off). A download is only used if it reads correctly and has trains in the coming week; the previous schedule is kept in `gtfs/schedule.prev.zip` and used if the current file is ever unreadable. |
 | `PORT` | `8080` | Port the app listens on **inside** the container. To change the port you open in the browser, change the host side of the port mapping instead (Unraid "Web UI port", compose `WEB_PORT`). |
 | `HOST` | `0.0.0.0` | Address the app listens on inside the container. |
@@ -167,7 +167,7 @@ Change the station IDs, the time, and `notify.mobile_app_YOUR_PHONE`.
 
 ## API
 
-All endpoints read the server's in-memory copy of Metra's data. **No request to this app ever triggers a request to Metra.** A single background job polls Metra's realtime feeds, and the poll function itself refuses to run more than once every 30 seconds, whatever calls it. A test checks this, and a live run of ~8,000 API requests in 70 s produced exactly 3 polls of each feed. The schedule is checked every 5 minutes.
+All endpoints read the server's in-memory copy of Metra's data. **No request to this app ever triggers a request to Metra.** A single background job polls Metra's realtime feeds, and the poll function itself refuses to run more than once every 30 seconds, whatever calls it. A test checks this, and a live run of ~8,000 API requests in 70 s produced exactly 3 polls of each feed. The schedule is checked every hour, and fully re-downloaded once a week.
 
 Which way a train is going (`inbound`/`outbound`) is decided by geography: a train is inbound if its last stop is closer to the Loop than your station. It doesn't depend on Metra's IDs or direction codes.
 

@@ -475,6 +475,7 @@
 
   function renderBoard() {
     const d = state.departures;
+    renderBoardNotice();
     if (!d) return;
     const now = serverNow();
     const from = d.station ? d.station.name : "";
@@ -500,6 +501,8 @@
       const meta = [
         chip(r.route_short, r.color, r.text_color),
         badge,
+        r.added ? '<span class="badge extra" title="Not in the published timetable">Extra train</span>' : "",
+        r.schedule_change && !r.cancelled ? `<span class="badge schedchg" title="${esc(r.schedule_change)}">Changed</span>` : "",
         r.train ? `<span>#${esc(r.train)}</span>` : "",
         (r.live || r.tracking) && !r.cancelled ? delayHtml(r.delay, r.tracking) : "",
       ].filter(Boolean).join("");
@@ -510,7 +513,8 @@
         ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)} · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
         ${finalHtml(r, d)}
         ${historyHtml(r.history)}
-        ${r.delay_reason ? `<div class="reason" title="${esc(r.delay_reason)}">${esc(r.delay_reason)}</div>` : ""}</div>
+        ${r.delay_reason ? `<div class="reason" title="${esc(r.delay_reason)}">${esc(r.delay_reason)}</div>`
+          : r.schedule_change ? `<div class="reason schedchg" title="${esc(r.schedule_change)}">${esc(r.schedule_change)}</div>` : ""}</div>
         <div class="mins">${minsHtml}</div>
       </li>`;
     }).join("");
@@ -598,6 +602,7 @@
     try { alerts = await api("/api/alerts"); } catch (e) { console.warn(e); return; }
     state.alerts = alerts;
     renderAlerts();
+    renderBoardNotice();
   }
 
   // The banner only features alerts for lines you use (the selected station,
@@ -617,12 +622,13 @@
     }
     const isMine = (a) => a.routes.some((r) => myLines.has(r.id));
     // Alerts you haven't hidden come first, so a new one leads the banner.
-    const fresh = (a) => (dismissed.has(a.id) ? 1 : 0);
+    // Then timetable changes before other notices (elevators, construction...).
+    const fresh = (a) => (dismissed.has(a.id) ? 2 : 0) + (a.schedule_change ? 0 : 1);
     const mine = alerts.filter(isMine).sort((x, y) => fresh(x) - fresh(y));
-    const other = view.alertLines === "mine" ? [] : alerts.filter((a) => !isMine(a));
+    const other = view.alertLines === "mine" ? [] : alerts.filter((a) => !isMine(a)).sort((x, y) => fresh(x) - fresh(y));
     bannerIds = [...mine, ...other].map((a) => a.id);
     const item = (a) => `<li class="${dismissed.has(a.id) ? "" : "unseen"}">
-      <div>${a.routes.map((r) => chip(r.short_name, r.color, r.text_color)).join(" ")}</div>
+      <div>${a.routes.map((r) => chip(r.short_name, r.color, r.text_color)).join(" ")}${a.schedule_change ? ' <span class="badge schedchg">Schedule change</span>' : ""}</div>
       <h3>${esc(a.header)}</h3>
       ${a.description && a.description !== a.header ? `<p>${esc(a.description)}</p>` : ""}
       ${a.url ? `<p><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">More info</a></p>` : ""}
@@ -656,6 +662,27 @@
     }
     $("alerts-list").innerHTML = listHtml;
   }
+
+  // A line above the board when Metra says trains on the lines shown won't
+  // match the published timetable (special or modified service, extra trains...).
+  function renderBoardNotice() {
+    const el = $("board-notice");
+    const d = state.departures;
+    const routes = new Set(((d && d.departures) || []).map((r) => r.route_id));
+    const hits = view.alerts === "off" ? []
+      : (state.alerts || []).filter((a) => a.schedule_change && a.routes.some((r) => routes.has(r.id)));
+    el.hidden = !hits.length;
+    if (!hits.length) return;
+    const lines = [...new Set(hits.flatMap((a) => a.routes.filter((r) => routes.has(r.id)).map((r) => r.short_name)))];
+    el.innerHTML = `<span class="badge schedchg">Schedule change</span>
+      <span class="txt"><b>${esc(lines.join(", "))}:</b> ${esc(hits[0].header)}</span>
+      ${hits.length > 1 ? `<span class="more">+${hits.length - 1}</span>` : ""}`;
+    el.title = hits.map((a) => a.header).join("\n");
+  }
+  $("board-notice").addEventListener("click", (e) => {
+    if (view.alerts === "bell") { e.stopPropagation(); setBell(true); }
+    else { $("alerts-list").hidden = false; $("alerts-toggle").setAttribute("aria-expanded", "true"); $("alerts").scrollIntoView({ behavior: "smooth" }); }
+  });
 
   // ---------- status ----------
   async function refreshStatus() {

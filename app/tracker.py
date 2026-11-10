@@ -86,6 +86,31 @@ DELAY_WORDS = re.compile(
 )
 
 
+# Alerts saying trains won't run as the published timetable says.
+SCHEDULE_EFFECTS = {"MODIFIED_SERVICE", "REDUCED_SERVICE", "ADDITIONAL_SERVICE", "NO_SERVICE", "DETOUR"}
+SCHEDULE_WORDS = re.compile(
+    r"\b(schedule (change|changes|adjustment)s?|(modified|special|revised|alternate|temporary|holiday|"
+    r"weekend|saturday|sunday) (schedule|service|timetable)|timetable|"
+    r"(extra|additional|added|special) (trains?|service)|cancel(l)?ed|annulled|"
+    r"will not (run|operate|stop)|not (running|operating)|no service|"
+    r"(bus(es)?|substitute bus(es)?) (will )?(replace|replacing|substitute)|bus substitution|"
+    r"(depart|leave|leaving|arrive)s? (\d+ )?(minutes? )?(earlier|later) than|"
+    r"line (will )?(close|closes|closed|closure)|line closure|express(es|ing)?\b(?! ?way)|"
+    r"last (inbound|outbound) (\w+ )?trains?|service (is scheduled to be |will be )?restored|"
+    r"skip(s|ping)? (stops|stations))\b",
+    re.IGNORECASE,
+)
+
+
+def is_schedule_change(a: rtp.AlertInfo) -> bool:
+    """Whether an alert says trains won't match the published timetable."""
+    if a.effect in SCHEDULE_EFFECTS:
+        return True
+    if a.effect in ("ACCESSIBILITY_ISSUE", "STOP_MOVED"):
+        return False
+    return bool(SCHEDULE_WORDS.search(f"{a.header} {a.description}"))
+
+
 def _status(r: dict) -> tuple[int | None, str]:
     """(delay in minutes, human status) for a departure row."""
     delay_min = round(r["delay"] / 60) if r["delay"] is not None else None
@@ -973,7 +998,16 @@ class Tracker:
             "tracking": bool(pred and pred.get("gps")),
             "cancelled": bool(pred and pred["cancelled"]),
             "delay_reason": self._row_reason(trip_id, trip[T_ROUTE], pred),
+            "added": False,
+            "schedule_change": self.schedule_note(trip_id, time.time()),
         }
+
+    def schedule_note(self, trip_id: str | None, now: float) -> str | None:
+        """Header of an active alert saying this specific train runs differently from the timetable."""
+        for a in self._alerts_by_trip.get(trip_id or "", []):
+            if a.active(now) and is_schedule_change(a):
+                return a.header or a.description[:140] or "Schedule change"
+        return None
 
     def _row_reason(self, trip_id: str | None, route_id: str | None, pred: dict | None) -> str | None:
         if not pred:
@@ -1016,6 +1050,8 @@ class Tracker:
                     "tracking": False,
                     "cancelled": False,
                     "delay_reason": None,
+                    "added": True,
+                    "schedule_change": self.schedule_note(tu.trip.trip_id, now),
                     "direction": self._direction(stu.stop_id, last),
                     "final_stop": s.stop_name(last),
                     "final_arrival": float(tu.stop_updates[-1].arrival_time or tu.stop_updates[-1].departure_time or 0) or None,
@@ -1184,6 +1220,7 @@ class Tracker:
                 "url": a.url,
                 "cause": a.cause,
                 "effect": a.effect,
+                "schedule_change": is_schedule_change(a),
                 "routes": [
                     {
                         "id": r,

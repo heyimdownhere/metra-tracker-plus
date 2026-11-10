@@ -39,6 +39,9 @@ Over the first days and weeks:
 
 - [ ] Weekly schedule re-download: about a week after updating, the log should show "Weekly schedule check: downloading the full schedule" then "Schedule unchanged" (or "Now using schedule …").
 
+- [ ] Schedule changes: alerts saying trains won't match the timetable (extra/special service, line closures, expressing, cancellations) are tagged **Schedule change**, listed first in the bell, and shown as a strip above the board for your line. Matching is by wording, because Metra sets almost every alert's type to "unknown"; it was tuned on Metra's 13 live alerts on Nov 10. Tell me about any it gets wrong.
+- [ ] If the Unraid template still has `STATIC_CHECK_INTERVAL=300`, change it to `3600` (hourly) or clear it.
+
 ## 3. Home Assistant
 
 - [ ] Find your phone's notify service (`notify.mobile_app_…`).
@@ -50,6 +53,7 @@ Over the first days and weeks:
 
 
 - [ ] **"Leave now" alerts.** Set how long it takes to get to your station; get told when to leave, adjusted for live delays ("Leave by 7:04 for the 7:12, running 3 min late"). It can use the home/work profile and `/api/now`. Deliver via Home Assistant (`notify.mobile_app_…`) or ntfy.
+- [ ] **Phone notification for schedule changes.** Home Assistant notification when a schedule-change alert or a cancellation affects your lines or your next train (alerts already carry `schedule_change` in `/api/alerts`).
 - [ ] **Alerts for your own stations.** Feature station-level alerts (elevator outages, entrance closures) for your home and work stations, and notify when one affects your train.
 - [x] **Remote access with Tailscale.** Working (the server at SERVER-IP). Don't port-forward the app: it has no login.
 

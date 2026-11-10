@@ -696,3 +696,37 @@ def test_home_and_work_fall_back_to_env(tracker, tmp_path, monkeypatch):
     c.put("/api/settings", json={"work_station": "C"})          # the app overrides the env value
     p = c.get("/api/settings").json()
     assert (p["work_station"], p["work_source"]) == ("C", "app") and p["home_station"] == "A"
+
+
+def test_schedule_change_alerts_are_tagged(tracker):
+    from app.tracker import is_schedule_change
+    special = _alert("s", pb.Alert.UNKNOWN_CAUSE, "UPN - Northwestern Football Weekend Service", route_id="L1")
+    elevator = _alert("e", pb.Alert.MAINTENANCE, "Elevator out of service at Alpha", route_id="L1")
+    trip = _alert("t", pb.Alert.UNKNOWN_CAUSE, "Train t-0800 will not stop at Bravo today", trip_id="t-0800")
+    _apply(tracker, [], [special, elevator, trip])
+    flags = {a["id"]: a["schedule_change"] for a in tracker.alerts(NOW)}
+    assert flags == {"s": True, "e": False, "t": True}
+    rows = {r["trip_id"]: r for r in tracker.departures("A", limit=5, now=NOW)["departures"]}
+    assert rows["t-0800"]["schedule_change"].startswith("Train t-0800 will not stop")
+    # Line-wide notices go to the board notice, not onto every train.
+    assert rows["t-0830"]["schedule_change"] is None
+    assert all(r["added"] is False for r in rows.values())
+    assert not is_schedule_change(tracker.rt.alerts[1])
+
+
+@pytest.mark.parametrize("header,description,expected", [
+    # Real Metra alerts (Nov 2026); Metra sets effect=UNKNOWN_EFFECT on almost all of them.
+    ("Metra Rock Island Line Closure the Weekend of Nov. 13-15", "The last outbound Rock Island mainline train will be Train 511", True),
+    ("UPN - Northwestern Football Weekend Service", "Union Pacific North line will be operating extra service", True),
+    ("NCS Train #100 On the Move - Expressing (UPDATE)", "will express from O'Hare Transfer to Western Avenue", True),
+    ("NCS Inbound and Outbound Trains On the Move", "some trains may be extensively delayed", False),
+    ("UPW Kedzie Station Construction", "the east end of platform 2 at Kedzie will be closed", False),
+    ("ME Beginning November 21, Station Repairs at 211th Street Station Will Affect Station Entrances",
+     "211th Station will have entrance closures due to station renovations", False),
+    ("RID - 115th St./Morgan Park Station Construction", "The south parking lot will be closed", False),
+])
+def test_schedule_change_wording(header, description, expected):
+    from app.tracker import is_schedule_change
+    a = rtp.AlertInfo(id="x", header=header, description=description, url=None, cause="UNKNOWN_CAUSE",
+                      effect="UNKNOWN_EFFECT", route_ids=[], stop_ids=[], trips=[], route_level_ids=[], periods=[])
+    assert is_schedule_change(a) is expected
