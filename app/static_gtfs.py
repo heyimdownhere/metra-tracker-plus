@@ -495,6 +495,10 @@ class StaticCache:
         self.zip_path = self.dir / "schedule.zip"
         self.pickle_path = self.dir / "static.pkl"
         self.version_path = self.dir / "published.txt"
+        # The schedule in use before the latest download: used if the current one is unusable.
+        self.backup_zip = self.dir / "schedule.prev.zip"
+        self.backup_version = self.dir / "published.prev.txt"
+        self.new_zip = self.dir / "schedule.new.zip"
 
     def ensure_dir(self) -> None:
         self.dir.mkdir(parents=True, exist_ok=True)
@@ -518,16 +522,65 @@ class StaticCache:
             pass
         except Exception as exc:  # corrupt/old pickle: fall through to the zip
             log.warning("Ignoring unreadable cache %s: %s", self.pickle_path, exc)
-        if self.zip_path.exists():
-            version = self.cached_version() or file_digest(self.zip_path)
+        for zip_path, version_path in ((self.zip_path, self.version_path), (self.backup_zip, self.backup_version)):
+            if not zip_path.exists():
+                continue
             try:
-                data = parse_gtfs_zip(self.zip_path, version)
+                version = version_path.read_text().strip() or file_digest(zip_path)
+            except OSError:
+                version = file_digest(zip_path)
+            try:
+                data = parse_gtfs_zip(zip_path, version)
             except Exception as exc:
-                log.warning("Cached zip unusable: %s", exc)
-                return None
+                log.warning("Cached schedule %s unusable: %s", zip_path.name, exc)
+                continue
+            if zip_path == self.backup_zip:
+                log.warning("Using the backup schedule %s", version)
             self.save_pickle(data)
             return data
         return None
+
+    def downloaded_at(self) -> float | None:
+        """When the schedule in use was last downloaded (or confirmed unchanged)."""
+        try:
+            return self.zip_path.stat().st_mtime
+        except OSError:
+            return None
+
+    def same_as_current(self, content: bytes) -> bool:
+        try:
+            return self.zip_path.stat().st_size == len(content) and self.zip_path.read_bytes() == content
+        except OSError:
+            return False
+
+    def mark_checked(self) -> None:
+        """A full download matched the file we have: record the time of the check."""
+        try:
+            os.utime(self.zip_path)
+        except OSError:
+            pass
+
+    def stage(self, content: bytes) -> Path:
+        """Write a new download next to the current one, without replacing it yet."""
+        self.ensure_dir()
+        _atomic_write(self.new_zip, content)
+        return self.new_zip
+
+    def promote(self, version: str) -> None:
+        """Make the staged download current; the old current becomes the backup."""
+        if self.zip_path.exists():
+            os.replace(self.zip_path, self.backup_zip)
+            old = self.cached_version()
+            if old:
+                _atomic_write(self.backup_version, (old + "\n").encode())
+        os.replace(self.new_zip, self.zip_path)
+        _atomic_write(self.version_path, (version + "\n").encode())
+
+    def discard_staged(self) -> None:
+        try:
+            self.new_zip.unlink()
+        except OSError:
+            pass
 
     def save_zip(self, content: bytes, version: str) -> None:
         self.ensure_dir()
@@ -538,6 +591,17 @@ class StaticCache:
         self.ensure_dir()
         payload = {"cache_version": CACHE_VERSION, "data": data}
         _atomic_write(self.pickle_path, pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+
+
+def check_usable(data: StaticData, today: date, days: int = 7) -> str | None:
+    """Why a parsed schedule shouldn't replace the current one, or None if it's fine."""
+    if not data.routes or not data.stops or not data.trip_stops or not data.stop_departures:
+        return "it has no routes, stops or trips"
+    if not data.station_children:
+        return "it has no stations with service"
+    if not any(data.active_services(today + timedelta(days=i)) for i in range(days)):
+        return f"it has no trains running in the next {days} days"
+    return None
 
 
 def _atomic_write(path: Path, content: bytes) -> None:

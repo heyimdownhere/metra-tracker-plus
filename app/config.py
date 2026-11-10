@@ -123,6 +123,7 @@ class Settings:
     realtime_interval: int
     static_check_interval: int
     port: int
+    static_full_refresh_days: int = 7
     history_days: int = 365
     host: str = "0.0.0.0"
     home_station: str | None = None
@@ -154,6 +155,7 @@ class Settings:
             f"  TZ                    {os.environ.get('TZ', '(container default)')}",
             f"  REALTIME_INTERVAL     {self.realtime_interval}s",
             f"  STATIC_CHECK_INTERVAL {self.static_check_interval}s",
+            f"  STATIC_FULL_REFRESH   " + (f"every {self.static_full_refresh_days} days" if self.static_full_refresh_days else "off"),
             f"  HISTORY_DAYS          {self.history_days}" + (" (history off)" if self.history_days == 0 else ""),
             f"  HOME_STATION          {self.home_station or '(not set)'}",
             f"  HOME_DESTINATION      {self.home_destination or '(not set)'}",
@@ -205,6 +207,8 @@ def load_settings() -> Settings:
         # Metra asks clients not to poll faster than every 30 seconds.
         realtime_interval=_int_env("REALTIME_INTERVAL", 30, 30, 3600, warnings),
         static_check_interval=_int_env("STATIC_CHECK_INTERVAL", 300, 60, 86400, warnings),
+        # Re-download the whole schedule this often even if Metra says it's unchanged (0 = never).
+        static_full_refresh_days=_int_env("STATIC_FULL_REFRESH_DAYS", 7, 0, 365, warnings),
         port=_int_env("PORT", DEFAULT_PORT, 1, 65535, warnings),
         host=_str_env("HOST", "0.0.0.0"),
         # Days of realtime history to keep in /config/history.db (0 disables).

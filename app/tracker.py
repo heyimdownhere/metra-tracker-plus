@@ -21,7 +21,7 @@ from .static_gtfs import (
     _dist_m,
     S_DEP, S_SEQ, S_STOP, S_ARR,
     T_DIRECTION, T_ROUTE, T_SERVICE, T_SHAPE, T_SHORT_NAME,
-    StaticCache, StaticData, parse_gtfs_zip,
+    StaticCache, StaticData, check_usable, parse_gtfs_zip,
 )
 
 log = logging.getLogger(__name__)
@@ -195,10 +195,35 @@ class Tracker:
             except Exception as exc:
                 log.exception("Static GTFS refresh failed")
                 self.static_error = str(exc)
+            # Once a week (STATIC_FULL_REFRESH_DAYS), download the full schedule
+            # even if published.txt hasn't changed, in case it changed silently.
+            try:
+                if self.static and self._full_refresh_due():
+                    log.info("Weekly schedule check: downloading the full schedule")
+                    await self.refresh_static(full=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                log.exception("Weekly schedule download failed; keeping the current schedule")
+                self.static_error = str(exc)
             # Retry sooner if we still have nothing to show.
             await asyncio.sleep(self.settings.static_check_interval if self.static else 60)
 
-    async def refresh_static(self, force: bool = False) -> bool:
+    def _full_refresh_due(self, now: float | None = None) -> bool:
+        days = self.settings.static_full_refresh_days
+        if not days:
+            return False
+        last = self.cache.downloaded_at()
+        now = time.time() if now is None else now
+        return last is None or now - last >= days * 86400
+
+    async def refresh_static(self, force: bool = False, full: bool = False) -> bool:
+        """Download the schedule if Metra published a new one (or always, with force/full).
+
+        A download only replaces the schedule in use if it parses and has trains
+        in the coming week; the previous file is kept as schedule.prev.zip.
+        `full` is the weekly re-check: an identical file just records the check.
+        """
         async with self._static_lock:
             assert self._client
             self.static_checked_at = time.time()
@@ -210,19 +235,39 @@ class Tracker:
             except httpx.HTTPError as exc:
                 log.warning("Could not fetch published.txt: %s", exc)
             current = self.static.version if self.static else None
-            if not force and self.static and (published is None or published == current):
+            if not force and not full and self.static and (published is None or published == current):
                 self.static_error = None
                 return False
             log.info("Downloading static GTFS (published: %s, have: %s)", published, current)
             r = await self._client.get(self.settings.static_url)
             r.raise_for_status()
             content = r.content
-            version = published or "sha256:" + hashlib.sha256(content).hexdigest()[:16]
-            if not force and version == current:
+            if self.static and await asyncio.to_thread(self.cache.same_as_current, content):
+                await asyncio.to_thread(self.cache.mark_checked)
+                log.info("Schedule unchanged (%s)", current)
+                self.static_error = None
                 return False
-            await asyncio.to_thread(self.cache.save_zip, content, version)
-            data = await asyncio.to_thread(parse_gtfs_zip, self.cache.zip_path, version)
+            version = published or "sha256:" + hashlib.sha256(content).hexdigest()[:16]
+            if self.static and version == current:
+                # Same published.txt but different contents: Metra changed it silently.
+                version = f"{version} (sha256:{hashlib.sha256(content).hexdigest()[:8]})"
+            staged = await asyncio.to_thread(self.cache.stage, content)
+            try:
+                data = await asyncio.to_thread(parse_gtfs_zip, staged, version)
+                problem = check_usable(data, data.local_date(time.time()))
+            except Exception as exc:
+                problem = f"it couldn't be read ({exc})"
+            if problem:
+                await asyncio.to_thread(self.cache.discard_staged)
+                msg = f"Downloaded schedule {version} not used: {problem}"
+                if self.static:
+                    msg += f"; keeping {self.static.version}"
+                log.warning(msg)
+                self.static_error = msg
+                return False
+            await asyncio.to_thread(self.cache.promote, version)
             await asyncio.to_thread(self.cache.save_pickle, data)
+            log.info("Now using schedule %s (previous kept as backup: %s)", version, current)
             self.static = data
             self.static_error = None
             self._trains_cache = None
@@ -1194,6 +1239,7 @@ class Tracker:
             "static_version": s.version if s else None,
             "static_loaded_at": s.loaded_at if s else None,
             "static_checked_at": self.static_checked_at,
+            "static_downloaded_at": self.cache.downloaded_at(),
             "static_error": self.static_error,
             "timezone": s.timezone if s else "America/Chicago",
             "agency": s.agency_name if s else "Metra",
