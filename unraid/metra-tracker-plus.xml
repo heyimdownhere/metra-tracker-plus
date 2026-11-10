@@ -1,8 +1,8 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>metra-tracker-plus</Name>
-  <Repository>metra-tracker-plus:latest</Repository>
-  <Registry/>
+  <Repository>ghcr.io/heyimdownhere/metra-tracker-plus:latest</Repository>
+  <Registry>https://github.com/heyimdownhere/metra-tracker-plus/pkgs/container/metra-tracker-plus</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
@@ -12,7 +12,7 @@
   <Overview>Self-hosted live Metra train tracker: map of all lines with live train positions, a departure board for your station, service alerts, long-term delay history, and a Home Assistant-friendly commute API. Uses Metra's GTFS schedule and GTFS-Realtime feeds (server-side only). Runs schedule-only until METRA_API_TOKEN is set.</Overview>
   <Category>Tools: Status:Stable</Category>
   <WebUI>http://[IP]:[PORT:8080]</WebUI>
-  <TemplateURL/>
+  <TemplateURL>https://raw.githubusercontent.com/heyimdownhere/metra-tracker-plus/main/unraid/metra-tracker-plus.xml</TemplateURL>
   <Icon>https://raw.githubusercontent.com/heyimdownhere/metra-tracker-plus/main/web/icon-192.png</Icon>
   <ExtraParams>--restart=unless-stopped</ExtraParams>
   <PostArgs/>
@@ -20,7 +20,7 @@
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Requires>Build the image on the server first (docker build -t metra-tracker-plus:latest /mnt/user/appdata/metra-tracker-plus-src), or set Repository to ghcr.io/heyimdownhere/metra-tracker-plus:latest to pull the published image. See README.</Requires>
+  <Requires>Uses the image published by the project on GitHub (ghcr.io/heyimdownhere/metra-tracker-plus). To run a locally built image instead, set Repository to metra-tracker-plus:latest. See README.</Requires>
   <Config Name="Web UI port" Target="8080" Default="8080" Mode="tcp" Description="Port you open in the browser (http://TOWER-IP:THIS-PORT). Change this one if 8080 is taken on the server." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
   <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/metra-tracker" Mode="rw" Description="Cached Metra schedule and history database." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/metra-tracker</Config>
   <Config Name="Metra API key" Target="METRA_API_TOKEN" Default="" Mode="" Description="Your Metra GTFS-Realtime API key. Leave empty for schedule-only mode." Type="Variable" Display="always" Required="false" Mask="true"></Config>

@@ -4,8 +4,8 @@ Updated 2026-11-09. The app runs against Metra's **real** schedule and **live** 
 
 ## 1. Deploy on the server (SERVER-IP): do first
 
-- [ ] Copy `unraid/metra-tracker-plus.xml` to `/boot/config/plugins/dockerMan/templates-user/` (from a clone of the repo, or download the file from GitHub).
-- [ ] In Unraid, go to **Docker → Add Container** and choose the template. Set **Repository** to `ghcr.io/heyimdownhere/metra-tracker-plus:latest` to use the published image; no building needed. If the pull is refused, make the package public: GitHub → profile → Packages → metra-tracker-plus → Package settings. (Alternative: clone the repo and run `docker build -t metra-tracker-plus:latest .`.)
+- [ ] Add the template: in the Unraid terminal run `wget -O /boot/config/plugins/dockerMan/templates-user/my-metra-tracker-plus.xml https://raw.githubusercontent.com/heyimdownhere/metra-tracker-plus/main/unraid/metra-tracker-plus.xml` (see README → Install on Unraid).
+- [ ] In Unraid, go to **Docker → Add Container** and choose **metra-tracker-plus** from the template list. The template already points at the published image (`ghcr.io/heyimdownhere/metra-tracker-plus:latest`, verified publicly pullable), so nothing needs building.
 - [ ] Fill in the template fields:
   - **Metra API key** (masked).
   - Optional: **Home station**, **Work station**, **Commute switch time**, **Workdays**. These can be left empty and set in the app instead.

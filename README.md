@@ -56,39 +56,37 @@ It's light on your phone's data: your home server talks to Metra, and your phone
 
 ## Install on Unraid (the server)
 
-The image is built locally on the server; there is no registry image.
+GitHub builds and publishes a ready-to-run image (`ghcr.io/heyimdownhere/metra-tracker-plus:latest`) on every push to `main`, and the Unraid template uses it. Nothing needs building.
 
-1. **Copy the source to the server.** From the Unraid terminal (or SSH into `root@SERVER-IP`):
+1. **Add the template to the server.** Open a terminal on Unraid (**>_** icon at top right of the web UI, or SSH to `root@SERVER-IP`) and run:
    ```sh
-   cd /mnt/user/appdata
-   git clone https://github.com/heyimdownhere/metra-tracker-plus.git metra-tracker-plus-src
+   wget -O /boot/config/plugins/dockerMan/templates-user/my-metra-tracker-plus.xml \
+     https://raw.githubusercontent.com/heyimdownhere/metra-tracker-plus/main/unraid/metra-tracker-plus.xml
    ```
-   (Or copy the folder over the `appdata` SMB share.)
-2. **Build the image:**
-   ```sh
-   docker build -t metra-tracker-plus:latest /mnt/user/appdata/metra-tracker-plus-src
-   ```
-3. **Install the template:**
-   ```sh
-   cp /mnt/user/appdata/metra-tracker-plus-src/unraid/metra-tracker-plus.xml \
-      /boot/config/plugins/dockerMan/templates-user/my-metra-tracker-plus.xml
-   ```
-4. In the Unraid web UI, go to **Docker → Add Container** and choose **metra-tracker-plus** from the *Template* dropdown. Check these settings:
-   - Port `8080`
-   - Appdata `/mnt/user/appdata/metra-tracker` → `/config`
-   - `METRA_API_TOKEN`: leave blank for now, or paste your key (the field is masked)
-   - `TZ=America/Chicago`
+2. **Create the container.** In the Unraid web UI, go to **Docker → Add Container**. In the **Template** dropdown (under *User templates*), choose **metra-tracker-plus**.
+3. **Fill in the fields:**
+   - **Metra API key**: paste your key (the field is masked). Leave it empty to run schedule-only.
+   - **Home station / Work station / Commute switch time / Workdays**: optional. You can leave these empty and set them in the app instead (briefcase button). Stations can be an id (`EVANSTON`, `OTC`) or a name.
+   - **Web UI port**: 8080, unless that's taken on the server.
+   - **Appdata**: `/mnt/user/appdata/metra-tracker` (default).
+   - More options (history days, poll interval, log level) are under **Show more settings**.
+4. Click **Apply**. Unraid pulls the image and starts the container.
+5. Open **http://SERVER-IP:8080**, or click the container icon → **WebUI**. On first start it downloads Metra's schedule, which takes a few seconds.
+6. **Check:** the status pill shows **Live**, and the container's **Logs** start with a settings summary. Fix anything the log warns about.
 
-   Click **Apply**.
-5. Open **http://SERVER-IP:8080** (or click **WebUI** on the container icon).
+**Changing settings later:** Docker tab → click the container icon → **Edit**, change a field, **Apply**. The schedule cache, history and app settings in appdata are kept.
 
-**When your API key arrives:** edit the container, paste the key into `METRA_API_TOKEN`, and click Apply. The status pill changes from *Schedule only* to *Live*.
+**Updating:** Docker tab → **Check for Updates**, then **Apply update** when it shows "update ready". New versions appear automatically whenever the project is pushed.
 
-**Updating:** `cd /mnt/user/appdata/metra-tracker-plus-src && git pull && docker build -t metra-tracker-plus:latest .`, then restart the container. The cached schedule and history in `/config` are kept.
+### Alternative: build the image on the server yourself
 
-### Alternative: pull the published image instead of building
+```sh
+cd /mnt/user/appdata
+git clone https://github.com/heyimdownhere/metra-tracker-plus.git metra-tracker-plus-src
+docker build -t metra-tracker-plus:latest metra-tracker-plus-src
+```
 
-On every push to `main`, GitHub Actions runs the tests and publishes `ghcr.io/heyimdownhere/metra-tracker-plus:latest`. To use it, set **Repository** in the Unraid template to `ghcr.io/heyimdownhere/metra-tracker-plus:latest`; Unraid's "check for updates" then works normally. If the GitHub repo is private, the package is private too: either make the package public (GitHub → your profile → Packages → metra-tracker-plus → Package settings), or `docker login ghcr.io` on the server with a token that has `read:packages`.
+Then set the template's **Repository** to `metra-tracker-plus:latest`.
 
 ### Backing up history
 
@@ -97,7 +95,8 @@ On every push to `main`, GitHub Actions runs the tests and publishes `ghcr.io/he
 ### docker compose (alternative)
 
 ```sh
-METRA_API_TOKEN=yourkey docker compose up -d --build
+cp .env.example .env    # then edit .env: API key, stations, port...
+docker compose up -d
 ```
 
 ## Phone data use
