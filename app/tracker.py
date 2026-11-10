@@ -10,7 +10,7 @@ import re
 import time
 from bisect import bisect_left
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 import httpx
 
@@ -774,14 +774,32 @@ class Tracker:
             return sched, arr_pred["time"]
         return sched, sched + ((pred or {}).get("delay") or 0)
 
+    def day_end(self, now: float) -> float:
+        """End of "today" for the timetable: 3 AM local, after Metra's last late-night trains."""
+        tz = self.static.tz
+        local = datetime.fromtimestamp(now, tz)
+        end = local.replace(hour=3, minute=0, second=0, microsecond=0)
+        if local >= end:
+            end = datetime.combine(local.date() + timedelta(days=1), end.time(), tzinfo=tz)
+        return end.timestamp()
+
+    def timetable(self, station_id: str, now: float | None = None, to: str | None = None) -> dict:
+        """Every train still to come today from a station (live times where Metra has them)."""
+        now = time.time() if now is None else now
+        until = self.day_end(now)
+        out = self.departures(station_id, limit=500, now=now, to=to, until=until)
+        out["until"] = until
+        return out
+
     def departures(
         self, station_id: str, limit: int = 5, now: float | None = None, to: str | None = None,
-        direction: str | None = None,
+        direction: str | None = None, until: float | None = None,
     ) -> dict:
         """Next departures from a station.
 
         `to`: only trains that later stop there (rows gain arrival times).
         `direction`: "inbound" (toward downtown) or "outbound".
+        `until`: only trains scheduled to leave before this time.
         """
         s = self.static
         if not s:
@@ -798,6 +816,8 @@ class Tracker:
         # lookup) are only built for the trains we actually return.
         candidates = []
         for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(stop_ids, now):
+            if until is not None and sched >= until:
+                continue
             if direction:
                 last = s.trip_stops[trip_id][-1][S_STOP]
                 if self._direction(stop_id, last) != direction:
@@ -821,7 +841,7 @@ class Tracker:
         if dest is None:
             rows.extend(
                 r for r in self._added_departures(set(stop_ids), now)
-                if not direction or r["direction"] == direction
+                if (not direction or r["direction"] == direction) and (until is None or r["time"] < until)
             )
         rows.sort(key=lambda r: r["time"])
         station = s.stops.get(station_id)

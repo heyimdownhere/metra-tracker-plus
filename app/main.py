@@ -185,6 +185,20 @@ def departures(
         raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
 
 
+@app.get("/api/timetable")
+def timetable(
+    station: str = Query(..., min_length=1),
+    to: str | None = Query(None, description="Only trains that later stop at this station"),
+):
+    """Every train still to come today (until 3 AM) from a station, with live times where available."""
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    try:
+        return _json(tracker.timetable(station, to=to or None))
+    except KeyError as exc:
+        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
+
+
 @app.get("/api/trains")
 def trains():
     return _json(tracker.trains())

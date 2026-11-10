@@ -5,6 +5,7 @@
   const STATION_KEY = "metra.station";
   const THEME_KEY = "metra.theme";
   const DEST_KEY = "metra.dest";
+  const TAB_KEY = "metra.tab";
   const VIEW_KEY = "metra.view";
   const DISMISSED_KEY = "metra.alerts.dismissed";
 
@@ -490,7 +491,13 @@
     }
     try {
       const to = state.dest ? `&to=${encodeURIComponent(state.dest)}` : "";
-      state.departures = await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}&limit=5`);
+      const tab = state.tab;
+      const d = tab === "timetable"
+        ? await api(`/api/timetable?station=${encodeURIComponent(state.station)}${to}`)
+        : await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}&limit=5`);
+      if (tab !== state.tab) return;  // switched tabs while loading
+      d.tab = tab;
+      state.departures = d;
     } catch (e) {
       console.warn(e);
       showEmpty("Couldn't load departures. Retrying…");
@@ -537,6 +544,47 @@
     return `<div class="hist" title="Based on the last ${h.days} days of Metra's predictions for this train at this station (weekdays, Saturdays and Sundays counted separately). Metra counts under 6 minutes late as on time.">${parts.map((x) => `<span class="part">${x}</span>`).join(" · ")}</div>`;
   }
 
+  // Today's timetable: every train still to come, compact, grouped by hour.
+  function renderTimetable(d, now, from) {
+    const el = $("tt");
+    const rows = d.departures;
+    if (!rows.length) {
+      el.innerHTML = "";
+      showEmpty(d.to ? `No more trains today from ${from} to ${d.to.name}.` : `No more trains today from ${from}.`);
+      return;
+    }
+    showEmpty("");
+    const hourFmt = new Intl.DateTimeFormat([], { hour: "numeric", timeZone: state.tz });
+    const next = rows.find((r) => !r.cancelled);
+    let lastHour = null;
+    const html = [];
+    html.push(`<p class="tt-summary">${rows.length} train${rows.length === 1 ? "" : "s"} left today${d.to ? ` to ${esc(d.to.name)}` : ""} · last at ${esc(fmtTime(rows[rows.length - 1].time))}</p>`);
+    html.push('<ol class="tt-list">');
+    for (const r of rows) {
+      const hour = hourFmt.format(new Date(r.time * 1000));
+      if (hour !== lastHour) { html.push(`<li class="tt-hour">${esc(hour)}</li>`); lastHour = hour; }
+      const mins = Math.round((r.time - now) / 60);
+      const status = r.cancelled ? '<span class="badge cancel">Cancelled</span>'
+        : r.added ? '<span class="badge extra">Extra</span>'
+        : (r.live || r.tracking) ? (delayHtml(r.delay, r.tracking) || '<span class="delay ontime">On time</span>')
+        : '<span class="tt-sched">Scheduled</span>';
+      const changed = r.scheduled && Math.abs(r.time - r.scheduled) >= 60;
+      const where = d.to && r.arrival
+        ? `Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)}`
+        : `To ${esc(r.destination || r.route_name)}`;
+      html.push(`<li class="tt-row${r.cancelled ? " cancelled" : ""}${r === next ? " next" : ""}" style="--line:${esc(r.color)}">
+        <span class="tt-time">${bigTime(r.time)}${changed ? `<s class="was">${fmtTime(r.scheduled)}</s>` : ""}</span>
+        <span class="tt-main">
+          <span class="tt-top">${chip(r.route_short, r.color, r.text_color)}${r.train ? `<span class="muted">#${esc(r.train)}</span>` : ""}${status}${r.schedule_change ? '<span class="badge schedchg">Changed</span>' : ""}</span>
+          <span class="tt-where">${where}</span>
+        </span>
+        <span class="tt-mins">${r.cancelled ? "" : r === next || mins < 60 ? (mins <= 0 ? "Now" : `${mins} min`) : ""}</span>
+      </li>`);
+    }
+    html.push("</ol>");
+    el.innerHTML = html.join("");
+  }
+
   function renderBoard() {
     const d = state.departures;
     renderBoardNotice();
@@ -546,6 +594,7 @@
     const tag = viewTag();
     $("board-title").innerHTML = esc(d.to ? `${from} → ${d.to.name}` : from) + (tag ? `<span class="home-tag">${tag}</span>` : "");
     $("board-updated").textContent = `Updated ${fmtTime(d.generated_at)}`;
+    if (d.tab === "timetable") { renderTimetable(d, now, from); return; }
     if (!d.departures.length) {
       $("board-list").innerHTML = "";
       showEmpty(d.to
@@ -587,14 +636,31 @@
   }
 
   // ---------- display options (this device only) ----------
-  const view = { pickers: "show", alerts: "bell", alertLines: "all", map: "show" };
+  const view = { pickers: "show", alerts: "bell", alertLines: "all" };
   try { Object.assign(view, JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")); } catch (e) { /* ignore */ }
+  // The old "Timetable only" display option is now the Timetable tab.
+  if (view.map === "hide" && !localStorage.getItem(TAB_KEY)) localStorage.setItem(TAB_KEY, "timetable");
+  delete view.map;
   // Earlier versions stored the line choice in "alerts".
   if (view.alerts === "all" || view.alerts === "mine") { view.alertLines = view.alerts; view.alerts = "bell"; }
   let pickersOpen = false;  // "Change" shows hidden pickers for a moment
 
-  const mapHidden = () => view.map === "hide";
+  // ---------- tabs: next trains + map / today's timetable ----------
+  state.tab = localStorage.getItem(TAB_KEY) === "timetable" ? "timetable" : "live";
+  const mapHidden = () => state.tab === "timetable";
+  document.querySelectorAll(".tabs [data-tab]").forEach((b) => b.addEventListener("click", () => {
+    if (state.tab === b.dataset.tab) return;
+    state.tab = b.dataset.tab;
+    localStorage.setItem(TAB_KEY, state.tab);
+    state.departures = null;
+    applyView();
+    refreshDepartures();
+  }));
+
   function applyView() {
+    document.querySelectorAll(".tabs [data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab)));
+    $("board-list").hidden = mapHidden();
+    $("tt").hidden = !mapHidden();
     const wasHidden = document.body.classList.contains("no-map");
     document.body.classList.toggle("no-map", mapHidden());
     if (wasHidden && !mapHidden()) {
@@ -617,7 +683,7 @@
   });
 
   $("view-btn").addEventListener("click", () => {
-    for (const k of ["map", "pickers", "alerts", "alertLines"]) {
+    for (const k of ["pickers", "alerts", "alertLines"]) {
       document.querySelectorAll(`#view-form input[name=${k}]`).forEach((r) => { r.checked = r.value === view[k]; });
     }
     $("view-dialog").showModal();

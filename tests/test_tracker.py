@@ -730,3 +730,16 @@ def test_schedule_change_wording(header, description, expected):
     a = rtp.AlertInfo(id="x", header=header, description=description, url=None, cause="UNKNOWN_CAUSE",
                       effect="UNKNOWN_EFFECT", route_ids=[], stop_ids=[], trips=[], route_level_ids=[], periods=[])
     assert is_schedule_change(a) is expected
+
+
+def test_timetable_lists_rest_of_today_only(tracker):
+    tt = tracker.timetable("A", now=NOW)  # Monday 7:50
+    times = [datetime.fromtimestamp(r["scheduled"], TZ) for r in tt["departures"]]
+    assert [t.strftime("%H:%M") for t in times] == ["08:00", "08:15", "08:30"]
+    assert all(t.date() == TODAY for t in times)  # Tuesday's trains are not included
+    assert datetime.fromtimestamp(tt["until"], TZ) == datetime(2026, 11, 10, 3, 0, tzinfo=TZ)
+    # With a destination: only trains that go there.
+    assert [r["trip_id"] for r in tracker.timetable("A", now=NOW, to="B")["departures"]] == ["t-0800", "u-0815", "t-0830"]
+    # Just after midnight, "today" still means the service day that is ending.
+    late = datetime(2026, 11, 10, 1, 0, tzinfo=TZ).timestamp()
+    assert datetime.fromtimestamp(tracker.day_end(late), TZ) == datetime(2026, 11, 10, 3, 0, tzinfo=TZ)

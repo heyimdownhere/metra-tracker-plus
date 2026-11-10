@@ -194,6 +194,7 @@ Example: `curl "http://SERVER-IP:8080/api/next?station=EVANSTON&direction=inboun
 | `GET /api/stations` | Stations with the lines that serve them. |
 | `GET /api/next?station=EVANSTON&direction=inbound` | **Next 5 trains** at a station. `direction`: `inbound`/`to` = toward downtown, `outbound`/`from` = away from downtown, omit for both. `station` takes an id or a name (`Evanston (Davis St.)`). Optional `limit` (1–20). Returns ISO times, minutes until, status, line, train number, destination, estimated arrival at the final stop, and a ready-made `message`. |
 | `GET /api/departures?station=ID&limit=5[&to=ID][&direction=inbound]` | Departure board; with `to`, only trains that later stop there. Each row includes `final_stop` and `final_arrival` (estimated arrival at the end of the line). |
+| `GET /api/timetable?station=ID[&to=ID]` | Every train still to come today (until 3 AM, the end of Metra's service day) from a station, with live times where Metra has them. Used by the "Today's timetable" tab. |
 | `GET /api/settings` / `PUT /api/settings` | Commute profile shared by all devices: `home_station`, `home_dest`, `work_station`, `switch_time`, `work_days` (Monday = 0), plus `leg` (which trip applies right now) and where each value came from (`app`/`env`). |
 | `GET /api/now?limit=5` | The board for right now: home → work before the switch time on workdays, work → home after, otherwise the home board. `leg` says which. Ideal for Home Assistant. |
 | `GET /api/work?limit=5` | Work → home board. |

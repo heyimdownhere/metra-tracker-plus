@@ -63,6 +63,10 @@
 
   <main class="layout">
     <aside class="panel">
+      <nav class="tabs" role="tablist" aria-label="View">
+        <button type="button" role="tab" id="tab-live" data-tab="live" aria-selected="true">Next trains &amp; map</button>
+        <button type="button" role="tab" id="tab-timetable" data-tab="timetable" aria-selected="false">Today's timetable</button>
+      </nav>
       <div class="picker" id="picker">
         <div class="picker-field">
           <div class="picker-label-row">
@@ -113,6 +117,7 @@
         </div>
         <button id="board-notice" class="board-notice" type="button" hidden></button>
         <ol id="board-list" class="board-list"></ol>
+        <div id="tt" class="tt" hidden></div>
         <p id="board-empty" class="muted board-empty" hidden></p>
       </div>
       <footer class="credits muted small">
@@ -178,14 +183,6 @@
     <form id="view-form" method="dialog">
       <h2>Display</h2>
       <p class="muted small">Saved on this device only.</p>
-      <fieldset class="seg-field">
-        <legend>Map</legend>
-        <div class="seg">
-          <label><input type="radio" name="map" value="show"><span>Show</span></label>
-          <label><input type="radio" name="map" value="hide"><span>Timetable only</span></label>
-        </div>
-        <p class="hint">Timetable only: just the train times, full width. The map stops loading, which also saves data.</p>
-      </fieldset>
       <fieldset class="seg-field">
         <legend>From / Going to boxes</legend>
         <div class="seg">
