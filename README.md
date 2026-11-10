@@ -199,7 +199,7 @@ Example: `curl "http://SERVER-IP:8080/api/next?station=EVANSTON&direction=inboun
 | `GET /api/now?limit=5` | The board for right now: home → work before the switch time on workdays, work → home after, otherwise the home board. `leg` says which. Ideal for Home Assistant. |
 | `GET /api/work?limit=5` | Work → home board. |
 | `GET /api/home?limit=5` | Departure board for the saved home station (also handy for Home Assistant or a wall display). |
-| `GET /api/trains[?to=ID[&from=ID]]` | Train positions (live, or estimated from the schedule). | With `to`, only trains that will still stop there; with `from` too, only those running from `from` toward `to`. |
+| `GET /api/trains[?to=ID[&from=ID]]` | Train positions (live, or estimated from the schedule). With `to`, only trains that will still stop there; with `from` too, only those running from `from` toward `to`. |
 | `GET /api/alerts` | Active service alerts. |
 | `GET /api/lines` | GeoJSON of every line. |
 | `GET /api/commute?from=ID&to=ID&limit=3` | Commute summary for Home Assistant. |
