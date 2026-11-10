@@ -190,9 +190,13 @@
           <label><input type="radio" name="count" value="5"><span>5</span></label>
           <label><input type="radio" name="count" value="8"><span>8</span></label>
           <label><input type="radio" name="count" value="10"><span>10</span></label>
-          <label><input type="radio" name="count" value="15"><span>15</span></label>
-          <label><input type="radio" name="count" value="20"><span>20</span></label>
+          <label><input type="radio" name="count" value="custom"><span>Custom</span></label>
         </div>
+        <label class="count-custom" id="count-custom" hidden>
+          <span>Number of trains</span>
+          <input type="number" id="count-input" min="1" max="50" step="1" inputmode="numeric">
+          <span class="hint">1–50</span>
+        </label>
         <p class="hint">How many upcoming trains the "Next trains" tab lists. The timetable tab always shows the rest of the day.</p>
       </fieldset>
       <fieldset class="seg-field">

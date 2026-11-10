@@ -653,7 +653,25 @@
   // ---------- tabs: next trains + map / today's timetable ----------
   state.tab = localStorage.getItem(TAB_KEY) === "timetable" ? "timetable" : "live";
   const mapHidden = () => state.tab === "timetable";
-  const boardCount = () => Math.min(20, Math.max(1, parseInt(view.count, 10) || 5));
+  const COUNT_PRESETS = ["3", "5", "8", "10"];
+  const clampCount = (v) => Math.min(50, Math.max(1, parseInt(v, 10) || 5));
+  const boardCount = () => clampCount(view.count);
+  function syncCountUi() {
+    const custom = !COUNT_PRESETS.includes(String(view.count));
+    document.querySelectorAll("#view-form input[name=count]").forEach((r) => { r.checked = custom ? r.value === "custom" : r.value === String(view.count); });
+    $("count-custom").hidden = !custom;
+    $("count-input").value = boardCount();
+  }
+  // Custom: type any number of trains; saved as you type.
+  $("count-input").addEventListener("input", () => {
+    const raw = $("count-input").value;
+    if (!raw) return;
+    view.count = String(clampCount(raw));
+    localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+    clearTimeout(syncCountUi.t);
+    syncCountUi.t = setTimeout(refreshDepartures, 400);
+  });
+  $("count-input").addEventListener("change", () => { $("count-input").value = boardCount(); });
   document.querySelectorAll(".tabs [data-tab]").forEach((b) => b.addEventListener("click", () => {
     if (state.tab === b.dataset.tab) return;
     state.tab = b.dataset.tab;
@@ -689,17 +707,34 @@
   });
 
   $("view-btn").addEventListener("click", () => {
-    for (const k of ["count", "mapTrains", "pickers", "alerts", "alertLines"]) {
+    syncCountUi();
+    for (const k of ["mapTrains", "pickers", "alerts", "alertLines"]) {
       document.querySelectorAll(`#view-form input[name=${k}]`).forEach((r) => { r.checked = r.value === view[k]; });
     }
     $("view-dialog").showModal();
   });
   $("view-form").addEventListener("change", (e) => {
     if (!e.target.name) return;
+    if (e.target.name === "count") {
+      if (e.target.value === "custom") {
+        // Start from the current number (or 12 if it was a preset) and let them type.
+        if (COUNT_PRESETS.includes(String(view.count))) view.count = "12";
+        localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+        syncCountUi();
+        refreshDepartures();
+        $("count-input").focus();
+        $("count-input").select();
+        return;
+      }
+      view.count = e.target.value;
+      localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+      syncCountUi();
+      refreshDepartures();
+      return;
+    }
     view[e.target.name] = e.target.value;
     localStorage.setItem(VIEW_KEY, JSON.stringify(view));
     if (e.target.name === "mapTrains") refreshTrains();
-    if (e.target.name === "count") refreshDepartures();
     pickersOpen = false;
     applyView();
   });

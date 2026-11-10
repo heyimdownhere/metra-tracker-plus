@@ -489,3 +489,12 @@ body.no-map .tabs { max-width: 760px; }
 .tt-where b { color: var(--text); }
 .tt-sched { color: var(--muted); }
 .tt-mins { font-size: 13px; font-weight: 700; white-space: nowrap; }
+
+.count-custom { display: flex; align-items: center; gap: 10px; margin-top: 4px; font-size: 13px; font-weight: 600; }
+.count-custom[hidden] { display: none; }
+.count-custom input {
+  width: 5.5em; padding: 8px 10px; border-radius: 9px; border: 1px solid var(--border);
+  background: var(--panel-2); color: var(--text); font: inherit; font-size: 16px;
+}
+.count-custom input:focus { outline: none; border-color: var(--accent); }
+.count-custom .hint { font-weight: 500; }

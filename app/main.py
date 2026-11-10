@@ -169,7 +169,7 @@ def stations():
 @app.get("/api/departures")
 def departures(
     station: str = Query(..., min_length=1),
-    limit: int = Query(5, ge=1, le=20),
+    limit: int = Query(5, ge=1, le=50),
     to: str | None = Query(None, description="Only trains that later stop at this station"),
     direction: str | None = Query(None, description="inbound/to or outbound/from downtown"),
 ):
@@ -292,7 +292,7 @@ def _board(from_id: str, to_id: str | None, limit: int, extra: dict | None = Non
 
 
 @app.get("/api/home")
-def home(limit: int = Query(5, ge=1, le=20)):
+def home(limit: int = Query(5, ge=1, le=50)):
     """Departure board for the home station (to its home destination, if set)."""
     if tracker.static is None:
         raise HTTPException(503, "Schedule not loaded yet")
@@ -303,7 +303,7 @@ def home(limit: int = Query(5, ge=1, le=20)):
 
 
 @app.get("/api/work")
-def work(limit: int = Query(5, ge=1, le=20)):
+def work(limit: int = Query(5, ge=1, le=50)):
     """Departure board for the trip home from work (work station -> home station)."""
     if tracker.static is None:
         raise HTTPException(503, "Schedule not loaded yet")
@@ -314,7 +314,7 @@ def work(limit: int = Query(5, ge=1, le=20)):
 
 
 @app.get("/api/now")
-def now_board(limit: int = Query(5, ge=1, le=20)):
+def now_board(limit: int = Query(5, ge=1, le=50)):
     """The board for right now: home -> work before the switch time on workdays,
     work -> home after it, otherwise the home board. `leg` says which."""
     if tracker.static is None:
