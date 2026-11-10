@@ -517,8 +517,10 @@
   }
 
   // ---------- display options (this device only) ----------
-  const view = { pickers: "show", alerts: "all" };
+  const view = { pickers: "show", alerts: "bell", alertLines: "all" };
   try { Object.assign(view, JSON.parse(localStorage.getItem(VIEW_KEY) || "{}")); } catch (e) { /* ignore */ }
+  // Earlier versions stored the line choice in "alerts".
+  if (view.alerts === "all" || view.alerts === "mine") { view.alertLines = view.alerts; view.alerts = "bell"; }
   let pickersOpen = false;  // "Change" shows hidden pickers for a moment
 
   function applyView() {
@@ -538,7 +540,7 @@
   });
 
   $("view-btn").addEventListener("click", () => {
-    for (const k of ["pickers", "alerts"]) {
+    for (const k of ["pickers", "alerts", "alertLines"]) {
       document.querySelectorAll(`#view-form input[name=${k}]`).forEach((r) => { r.checked = r.value === view[k]; });
     }
     $("view-dialog").showModal();
@@ -564,6 +566,27 @@
     renderAlerts();
   });
 
+  // Bell: alerts stay out of the way until you open them. The badge counts
+  // alerts you haven't looked at yet; opening the bell marks them seen.
+  const bellOpen = () => !$("bell-panel").hidden;
+  function setBell(open) {
+    const wasOpen = bellOpen();
+    $("bell-panel").hidden = !open;
+    $("bell-btn").setAttribute("aria-expanded", String(open));
+    // New ones keep their dot while the list is open; they count as seen once you close it.
+    if (wasOpen && !open) {
+      const live = new Set((state.alerts || []).map((a) => a.id));
+      dismissed = new Set([...dismissed, ...bannerIds].filter((id) => live.has(id)));
+      localStorage.setItem(DISMISSED_KEY, JSON.stringify([...dismissed]));
+      renderAlerts();
+    }
+  }
+  $("bell-btn").addEventListener("click", (e) => { e.stopPropagation(); setBell(!bellOpen()); });
+  document.addEventListener("click", (e) => {
+    if (bellOpen() && !$("bell-panel").contains(e.target)) setBell(false);
+  });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && bellOpen()) setBell(false); });
+
   $("alerts-toggle").addEventListener("click", () => {
     const listEl = $("alerts-list");
     listEl.hidden = !listEl.hidden;
@@ -583,7 +606,10 @@
   function renderAlerts() {
     const alerts = state.alerts || [];
     const box = $("alerts");
-    if (!alerts.length || view.alerts === "off") { box.hidden = true; return; }
+    const bell = view.alerts === "bell";
+    $("bell-btn").hidden = !bell;
+    if (!bell) $("bell-panel").hidden = true;
+    if (view.alerts === "off") { box.hidden = true; return; }
     const myLines = new Set();
     for (const id of [state.station, state.dest, state.home.home_station, state.home.home_dest, state.home.work_station]) {
       const st = state.stationById.get(id);
@@ -593,15 +619,30 @@
     // Alerts you haven't hidden come first, so a new one leads the banner.
     const fresh = (a) => (dismissed.has(a.id) ? 1 : 0);
     const mine = alerts.filter(isMine).sort((x, y) => fresh(x) - fresh(y));
-    const other = view.alerts === "mine" ? [] : alerts.filter((a) => !isMine(a));
+    const other = view.alertLines === "mine" ? [] : alerts.filter((a) => !isMine(a));
     bannerIds = [...mine, ...other].map((a) => a.id);
-    if (!bannerIds.length || bannerIds.every((id) => dismissed.has(id))) { box.hidden = true; return; }
-    const item = (a) => `<li>
+    const item = (a) => `<li class="${dismissed.has(a.id) ? "" : "unseen"}">
       <div>${a.routes.map((r) => chip(r.short_name, r.color, r.text_color)).join(" ")}</div>
       <h3>${esc(a.header)}</h3>
       ${a.description && a.description !== a.header ? `<p>${esc(a.description)}</p>` : ""}
       ${a.url ? `<p><a href="${esc(a.url)}" target="_blank" rel="noopener noreferrer">More info</a></p>` : ""}
     </li>`;
+    const listHtml = mine.map(item).join("")
+      + (other.length && mine.length ? '<li class="alerts-divider">Other lines</li>' : "")
+      + other.map(item).join("");
+    if (bell) {
+      box.hidden = true;
+      const unseen = bannerIds.filter((id) => !dismissed.has(id)).length;
+      const badge = $("bell-badge");
+      badge.hidden = !unseen;
+      badge.textContent = unseen > 9 ? "9+" : String(unseen);
+      badge.classList.toggle("mine", mine.some((a) => !dismissed.has(a.id)));
+      $("bell-btn").title = bannerIds.length ? `${bannerIds.length} alert${bannerIds.length === 1 ? "" : "s"}${unseen ? `, ${unseen} new` : ""}` : "No alerts";
+      $("bell-sub").textContent = !bannerIds.length ? "" : mine.length ? `${mine.length} on your lines` : "None on your lines";
+      $("bell-list").innerHTML = listHtml || `<li class="empty">No alerts${view.alertLines === "mine" ? " on your lines" : ""} right now.</li>`;
+      return;
+    }
+    if (!bannerIds.length || bannerIds.every((id) => dismissed.has(id))) { box.hidden = true; return; }
     box.hidden = false;
     box.classList.toggle("quiet", !mine.length);
     if (mine.length) {
@@ -613,9 +654,7 @@
       $("alerts-headline").textContent = `${other.length} alert${other.length === 1 ? "" : "s"} on other lines`;
       $("alerts-count").textContent = "Show";
     }
-    $("alerts-list").innerHTML = mine.map(item).join("")
-      + (other.length && mine.length ? '<li class="alerts-divider">Other lines</li>' : "")
-      + other.map(item).join("");
+    $("alerts-list").innerHTML = listHtml;
   }
 
   // ---------- status ----------

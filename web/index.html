@@ -28,6 +28,10 @@
     </div>
     <div class="topbar-right">
       <span id="mode-pill" class="pill" title="">Loading…</span>
+      <button id="bell-btn" class="icon-btn bell-btn" type="button" aria-label="Alerts" aria-expanded="false" aria-controls="bell-panel" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a1.5 1.5 0 0 1 1.5 1.5v.6A6.5 6.5 0 0 1 18.5 10.5v4l1.8 2.7a1 1 0 0 1-.8 1.55H4.5a1 1 0 0 1-.8-1.55l1.8-2.7v-4A6.5 6.5 0 0 1 10.5 4.1v-.6A1.5 1.5 0 0 1 12 2Zm-2.5 18h5a2.5 2.5 0 0 1-5 0Z"/></svg>
+        <span id="bell-badge" class="bell-badge" hidden></span>
+      </button>
       <button id="commute-btn" class="icon-btn" type="button" aria-label="Commute settings" title="Commute: home, work and times">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6a2 2 0 0 1 2 2v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2Zm0 4h6V5H9v2Z"/></svg>
       </button>
@@ -39,6 +43,11 @@
       </button>
     </div>
   </header>
+
+  <div id="bell-panel" class="bell-panel" role="dialog" aria-label="Alerts" hidden>
+    <div class="bell-head"><b>Alerts</b><span id="bell-sub" class="muted small"></span></div>
+    <ul id="bell-list" class="bell-list"></ul>
+  </div>
 
   <section id="alerts" class="alerts" hidden>
     <div class="alerts-row">
@@ -177,13 +186,21 @@
         <p class="hint">Hidden: tap <b>Change</b> next to the board title when you need them.</p>
       </fieldset>
       <fieldset class="seg-field">
-        <legend>Alerts banner</legend>
+        <legend>Alerts</legend>
         <div class="seg">
-          <label><input type="radio" name="alerts" value="all"><span>All lines</span></label>
-          <label><input type="radio" name="alerts" value="mine"><span>My lines</span></label>
+          <label><input type="radio" name="alerts" value="bell"><span>🔔 Bell</span></label>
+          <label><input type="radio" name="alerts" value="banner"><span>Banner</span></label>
           <label><input type="radio" name="alerts" value="off"><span>Off</span></label>
         </div>
-        <p class="hint">"My lines" = lines through your home, work and selected stations. Tap ✕ on the banner to hide the current alerts until a new one appears.</p>
+        <p class="hint">Bell: tucked away behind the bell at the top; a number shows when there's something new. Banner: shown across the top (✕ hides it until a new alert appears).</p>
+      </fieldset>
+      <fieldset class="seg-field">
+        <legend>Alerts for</legend>
+        <div class="seg">
+          <label><input type="radio" name="alertLines" value="all"><span>All lines</span></label>
+          <label><input type="radio" name="alertLines" value="mine"><span>My lines</span></label>
+        </div>
+        <p class="hint">"My lines" = lines through your home, work and selected stations.</p>
       </fieldset>
       <div class="btns"><button type="submit" class="primary">Done</button></div>
     </form>

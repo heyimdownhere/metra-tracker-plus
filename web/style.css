@@ -64,6 +64,8 @@ button { font: inherit; color: inherit; }
 .logo { width: 26px; height: 26px; fill: var(--accent); }
 .brand h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
 .brand h1 span { color: var(--accent); }
+/* Narrow phones: keep the logo, drop the title, so the buttons fit. */
+@media (max-width: 430px) { .brand h1 { display: none; } }
 .topbar-right { display: flex; align-items: center; gap: 10px; }
 .icon-btn {
   width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--border);
@@ -389,3 +391,34 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
 .seg input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: -2px; }
 #view-form .btns { display: flex; justify-content: flex-end; }
 #view-form .btns .primary { padding: 9px 18px; border-radius: 9px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-weight: 700; cursor: pointer; }
+
+/* ---- alerts bell ---- */
+.bell-btn { position: relative; }
+.bell-badge {
+  position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 5px;
+  border-radius: 9px; background: var(--muted); color: #fff; font-size: 11px; font-weight: 700;
+  display: grid; place-items: center; line-height: 1; border: 2px solid var(--panel);
+}
+.bell-badge.mine { background: #e5484d; }
+.bell-panel {
+  position: fixed; z-index: 1100; top: calc(max(10px, env(safe-area-inset-top)) + 46px); right: 12px;
+  width: min(420px, calc(100vw - 24px)); max-height: 70vh; overflow: auto;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow);
+}
+.bell-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; padding: 12px 14px 6px; position: sticky; top: 0; background: var(--panel); }
+.bell-list { list-style: none; margin: 0; padding: 0 14px 10px; }
+.bell-list li { padding: 10px 0; border-top: 1px solid var(--border); }
+.bell-list li.unseen h3::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); margin-right: 6px; vertical-align: 1px; }
+.bell-list h3 { font-size: 14px; margin: 4px 0; }
+.bell-list p { margin: 4px 0; white-space: pre-line; font-size: 13px; }
+.bell-list a { color: var(--accent); }
+.bell-list li.alerts-divider { font-size: 11px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); padding: 10px 0 2px; }
+.bell-list li.empty { color: var(--muted); border-top: 0; }
+/* Narrow phones: smaller buttons; a long status pill shortens instead of pushing buttons off-screen. */
+.topbar-right { min-width: 0; }
+.pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+@media (max-width: 430px) {
+  .topbar { gap: 8px; padding-left: 12px; padding-right: 12px; }
+  .topbar-right { gap: 6px; }
+  .icon-btn { width: 34px; height: 34px; flex: none; }
+}

@@ -34,7 +34,7 @@ Over the first days and weeks:
 - [ ] After about a week, on-time history lines ("90% on time · avg 3 min late") should start appearing. Check that they look sensible.
 - [ ] railsmaps.com: check its license. If reuse is allowed, add it as a basemap in `web/map.js`; otherwise drop it.
 
-- [ ] Display options (eye button): hide the From/Going-to boxes and the alerts banner; ✕ on the banner hides the current alerts until a new one appears. Check on your phone.
+- [ ] Display options (eye button): hide the From/Going-to boxes; alerts as a 🔔 bell (default; number = new alerts, red if on your lines), a banner, or off. Check on your phone.
 - [ ] After updating, reopen the app twice: the second open should be noticeably quicker (scripts now come from the phone's cache).
 
 ## 3. Home Assistant
