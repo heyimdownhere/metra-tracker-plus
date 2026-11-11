@@ -1,6 +1,6 @@
 # Runs the tests on every push and pull request. On pushes to main, once the
 # tests pass, also builds the Docker image and publishes it to GitHub
-# Container Registry (ghcr.io/heyimdownhere/metra-tracker-plus) so the server can
+# Container Registry (ghcr.io/heyimdownhere/metra-tracker-plus) so a server can
 # pull it instead of building locally.
 name: ci
 

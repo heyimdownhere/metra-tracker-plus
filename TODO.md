@@ -1,10 +1,10 @@
 # Metra Tracker+: what's left
 
-Updated 2026-11-11. The app runs on the server against Metra's **real** schedule and **live** feeds. 66 tests pass. CI is green and publishes a ready-to-run Docker image on every push to `main`. What's left is real-world checks, Home Assistant, and new features.
+Updated 2026-11-11. The app runs on the home server against Metra's **real** schedule and **live** feeds. 66 tests pass. CI is green and publishes a ready-to-run Docker image on every push to `main`. What's left is real-world checks, Home Assistant, and new features.
 
-## 1. Deploy on the server: done
+## 1. Deploy on the home server: done
 
-Running on the server at port 9090 (reached over Tailscale at `http://SERVER-IP:9090`), with live data, home/work saved on the server.
+Running on the home server (reached privately over Tailscale), with live data and home/work saved on the server.
 
 
 ## 2. Check in real use
@@ -37,8 +37,8 @@ Over the first days and weeks:
 ## 3. Home Assistant
 
 - [ ] Find your phone's notify service (`notify.mobile_app_…`).
-- [ ] Use `http://SERVER-IP:8080/api/now` as the sensor resource. It returns the right trip for the time of day, so no stations are hard-coded. (`docs/home-assistant.yaml` has a working example using `/api/commute`; swap the URL.)
-- [ ] Add it to the HA repo (`(private Home Assistant repo)`) as a package; check how `configuration.yaml` is organized first.
+- [ ] Use `http://<server-ip>:<port>/api/now` as the sensor resource. It returns the right trip for the time of day, so no stations are hard-coded. (`docs/home-assistant.yaml` has a working example using `/api/commute`; swap the URL.)
+- [ ] Add it to the Home Assistant config as a package; check how `configuration.yaml` is organized first.
 - [ ] Set the notification time and weekdays. Run it manually once to test.
 
 ## 4. Next features
@@ -47,12 +47,12 @@ Over the first days and weeks:
 - [ ] **"Leave now" alerts.** Set how long it takes to get to your station; get told when to leave, adjusted for live delays ("Leave by 7:04 for the 7:12, running 3 min late"). It can use the home/work profile and `/api/now`. Deliver via Home Assistant (`notify.mobile_app_…`) or ntfy.
 - [ ] **Phone notification for schedule changes.** Home Assistant notification when a schedule-change alert or a cancellation affects your lines or your next train (alerts already carry `schedule_change` in `/api/alerts`).
 - [ ] **Alerts for your own stations.** Feature station-level alerts (elevator outages, entrance closures) for your home and work stations, and notify when one affects your train.
-- [x] **Remote access with Tailscale.** Working (the server at SERVER-IP). Don't port-forward the app: it has no login.
+- [x] **Remote access with Tailscale.** Working. Don't port-forward the app: it has no login.
 
 ## 5. Ideas
 
 - [ ] **Show trains that skip your stop** on the board, crossed out with "Skips <station>", instead of leaving them out.
-- [ ] **Install as an Android app:** give the server an https address with Tailscale (`tailscale serve --bg 9090`, MagicDNS + HTTPS certificates on), then Chrome → Install app. Check the icon and launch colours in light mode.
+- [ ] **Install as an Android app:** give the server an https address with Tailscale (`tailscale serve --bg <port>`, MagicDNS + HTTPS certificates on), then Chrome → Install app. Check the icon and launch colours in light mode.
 
 - [ ] Offline app shell (service worker): opens instantly even with no signal and shows the last board, marked as old.
 
@@ -70,7 +70,7 @@ Over the first days and weeks:
 - **Home + work commute**: work station, switch time (presets Noon–7 PM) and workdays. On workdays the app opens on home → work before the switch time and work → home after; other days on the home board. Settable in the app (briefcase button with searchable station pickers, "Set as home" / "Set as work") or by env (`HOME_STATION`, `WORK_STATION`, `COMMUTE_SWITCH_TIME`, `WORK_DAYS`). App-saved values win; unset ones fall back to env. A fresh install shows a "Set up your commute" card. Adds `/api/now` and `/api/work`.
 
 **Board and map**
-- **Self-hosted map**: the server downloads a Chicago-area OpenStreetMap extract (Protomaps) by range requests, serves tiles, fonts and icons itself, and refreshes it monthly. Tested end-to-end against a local test archive (the extract is tile-for-tile exact; with the map present the browser makes zero outside requests). Fallback chain: the server map → OpenFreeMap → Simple.
+- **Self-hosted map**: the server downloads a Chicago-area OpenStreetMap extract (Protomaps) by range requests, serves tiles, fonts and icons itself, and refreshes it monthly. Tested end-to-end against a local test archive (the extract is tile-for-tile exact; with the map present the browser makes zero outside requests). Fallback chain: server map → OpenFreeMap → Simple.
 - Map background switched from CARTO (now needs an API key) to **Simple**, the app's own background with no outside service, key or extra data, as the default. Optional free, no-key backgrounds: OpenFreeMap Streets/Light/Dark and Esri Satellite, with automatic fallback to Simple if one can't load.
 - Home, work and switch time are saved on the server (`/config/settings.json`) and survive restarts and updates (verified).
 - Home and work shown on the map as labelled pins (blue house, amber briefcase) that sit above trains, a pulsing ring on the station you're viewing, the map opening framed on your commute, and a "show my commute" map button.

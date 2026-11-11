@@ -813,10 +813,10 @@
       ["Schedule", s.static_version || null],
       ["Map", {
         ready: `Stored on the server (${Math.round((mapSt.size || 0) / 1e6)} MB)`,
-        downloading: "the server is downloading it",
+        downloading: "The server is downloading it",
         missing: "Not downloaded yet",
         error: `Download failed: ${mapSt.error || "unknown error"}`,
-        disabled: "the server's map is off (MAP_DOWNLOAD=false); using online maps",
+        disabled: "The server's map is off (MAP_DOWNLOAD=false); using online maps",
       }[mapSt.state] || null],
       ["Trains update", `every ${state.interval}s`],
     ]);

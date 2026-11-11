@@ -151,7 +151,7 @@
     }
 
     // Which style should be shown for a chosen background right now:
-    // the server's map -> online fallback -> simple.
+    // The server's map -> online fallback -> simple.
     function resolved(name) {
       const b = BASEMAPS[name] || BASEMAPS.auto;
       if (b.local) {
@@ -235,7 +235,7 @@
       else if (st.state === "downloading") {
         const p = st.progress || {};
         const pct = p.stage === "tiles" && p.total ? ` ${Math.round((100 * p.done) / p.total)}%` : "";
-        text = `the server is downloading the map${pct}. Using the online map (or Simple) until it's ready.`;
+        text = `The server is downloading the map${pct}. Using the online map (or Simple) until it's ready.`;
       } else if (st.state === "ready") text = `Map stored on the server (${Math.round((st.size || 0) / 1e6)} MB).`;
       else if (st.state === "error") text = `Map download failed: ${st.error}. Using the online map (or Simple); it will retry.`;
       else if (st.state === "disabled") text = "Map download is turned off (MAP_DOWNLOAD=false).";
