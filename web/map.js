@@ -10,7 +10,7 @@
     rail: false,           // OpenRailwayMap track overlay
     railOpacity: 70,
     buildings: true,
-    buildingOpacity: 70,
+    buildingOpacity: 40,
     lineOpacity: 90,
     lineWidth: 4,
     stations: true,
@@ -47,11 +47,15 @@
     attribution: 'Rail overlay: <a href="https://www.openrailwaymap.org/" target="_blank" rel="noopener">OpenRailwayMap</a> (CC-BY-SA)',
   };
   const LOOP = [-87.6345, 41.8812];
+  // Buildings are only drawn (and their tiles only fetched) from street level in.
+  const BUILDINGS_MIN_ZOOM = 15;
 
   function loadSettings() {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || "{}"); } catch (e) { /* ignore */ }
     const s = { ...DEFAULTS, ...saved };
+    // Building opacity used to start at 70%; move anyone still on that old default to 40%.
+    if (!saved.v || saved.v < 2) { if (s.buildingOpacity === 70) s.buildingOpacity = 40; s.v = 2; }
     // Older versions had "none": map it onto today's options.
     if (s.basemap === "none") s.basemap = "simple";
     if (!BASEMAPS[s.basemap]) s.basemap = "auto";
@@ -275,10 +279,11 @@
         type: "fill-extrusion",
         source,
         "source-layer": "buildings",
-        minzoom: 13,
+        minzoom: BUILDINGS_MIN_ZOOM,
         paint: {
           "fill-extrusion-color": buildingColor(),
-          "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], 13, 0, 14.5,
+          // Rise out of the ground over the first zoom level instead of popping in.
+          "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], BUILDINGS_MIN_ZOOM, 0, BUILDINGS_MIN_ZOOM + 1,
             ["coalesce", ["get", "height"], ["get", "render_height"], 8]],
           "fill-extrusion-base": ["coalesce", ["get", "min_height"], ["get", "render_min_height"], 0],
           "fill-extrusion-opacity": settings.buildingOpacity / 100,
@@ -295,8 +300,8 @@
       if (animate) {
         if (settings.buildings && map.getPitch() < 20) {
           // Zoomed out there is nothing to extrude; show off downtown instead.
-          if (map.getZoom() < 12) map.flyTo({ center: LOOP, zoom: 15, pitch: 55, bearing: -20, duration: 1500 });
-          else map.easeTo({ pitch: 50, zoom: Math.max(map.getZoom(), 14), duration: 900 });
+          if (map.getZoom() < 12) map.flyTo({ center: LOOP, zoom: BUILDINGS_MIN_ZOOM + 0.8, pitch: 55, bearing: -20, duration: 1500 });
+          else map.easeTo({ pitch: 50, zoom: Math.max(map.getZoom(), BUILDINGS_MIN_ZOOM + 0.5), duration: 900 });
         }
         if (!settings.buildings && map.getPitch() > 0) map.easeTo({ pitch: 0, bearing: 0, duration: 700 });
       }
@@ -378,7 +383,7 @@
         <label class="row slider"><span>Basemap opacity</span><input type="range" min="0" max="100" step="5" data-k="basemapOpacity"><output></output></label>
         <label class="row check"><input type="checkbox" data-k="rail"><span>Railway tracks overlay</span></label>
         <label class="row slider"><span>Tracks opacity</span><input type="range" min="10" max="100" step="5" data-k="railOpacity"><output></output></label>
-        <label class="row check"><input type="checkbox" data-k="buildings"><span>3D buildings</span></label>
+        <label class="row check"><input type="checkbox" data-k="buildings"><span>3D buildings <small class="hint">(appear when zoomed in to street level)</small></span></label>
         <label class="row slider"><span>Building opacity</span><input type="range" min="10" max="100" step="5" data-k="buildingOpacity"><output></output></label>
         <h3>Metra</h3>
         <label class="row check"><input type="checkbox" data-k="lines"><span>Lines</span></label>
