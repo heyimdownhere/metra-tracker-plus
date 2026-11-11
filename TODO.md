@@ -11,12 +11,12 @@ Running on the home server (reached privately over Tailscale), with live data an
 
 Map tiles were blocked in the dev sandbox, so these have never been seen drawing:
 
-- [ ] **Self-hosted map:** after deploying, watch the container log for "Map: extracting Chicago area…" then "Map: saved N MB". The layers panel shows progress. This first real download is untested: the dev sandbox couldn't reach Protomaps, though the whole pipeline was tested against a local test archive. If the latest-build lookup fails, set `MAP_SOURCE` to a specific `https://build.protomaps.com/YYYYMMDD.pmtiles`.
+- [x] **Self-hosted map:** downloaded and working on the server (street labels, places and 3D buildings seen on Nov 11).
 - [ ] Check the map looks right (labels, icons, light/dark), how big the file is, and 3D buildings from the local map (their heights come from the map's `height` field; unverified).
 - [ ] Online options and fallbacks: Streets (OpenFreeMap), Satellite (Esri), tracks overlay (OpenRailwayMap). The fallback to Simple was tested; the online maps themselves couldn't be reached from the sandbox.
-- [ ] 3D buildings (OpenFreeMap) in the Loop, in dark and light mode, and phone performance with them on.
+- [ ] 3D buildings after the Nov 11 fix: no hard edge when the map is tilted; check the 40% default looks right (raise it in the layers panel if walls look see-through), and phone performance with them on.
 - [ ] Estimated train positions (schedule-only mode) sit on the lines, especially the ME and RI branches.
-- [ ] Refresh the README screenshots once the map tiles show (current ones have a blank map background).
+- [ ] Retake the README screenshots with the self-hosted map showing (current ones use the Simple background).
 
 Over the first days and weeks:
 
@@ -32,6 +32,8 @@ Over the first days and weeks:
 - [ ] Weekly schedule re-download: about a week after updating, the log should show "Weekly schedule check: downloading the full schedule" then "Schedule unchanged" (or "Now using schedule …").
 
 - [ ] Schedule changes: alerts saying trains won't match the timetable (extra/special service, line closures, expressing, cancellations) are tagged **Schedule change**, listed first in the bell, and shown as a strip above the board for your line. Matching is by wording, because Metra sets almost every alert's type to "unknown"; it was tuned on Metra's 13 live alerts on Nov 10. Tell me about any it gets wrong.
+- [ ] Trains sit on the line now (GPS snapped to the track within 150 m). Check a few on the map.
+- [ ] New since Nov 11: **Clear** button, **Map** tab (map only), station names in the board title move the map, Going-to list only shows stations with a direct train.
 - [ ] If the Unraid template still has `STATIC_CHECK_INTERVAL=300`, change it to `3600` (hourly) or clear it.
 
 ## 3. Home Assistant
