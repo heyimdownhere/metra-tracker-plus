@@ -121,15 +121,14 @@
           <span id="board-updated" class="muted small"></span>
           </div>
         </div>
-        <button id="board-notice" class="board-notice" type="button" hidden></button>
+        <div id="board-notice" class="board-notice" hidden>
+          <button type="button" class="bn-main" id="board-notice-main"></button>
+          <button type="button" class="bn-x" id="board-notice-x" aria-label="Hide this alert" title="Hide (swipe also works)">✕</button>
+        </div>
         <ol id="board-list" class="board-list"></ol>
         <div id="tt" class="tt" hidden></div>
         <p id="board-empty" class="muted board-empty" hidden></p>
       </div>
-      <footer class="credits muted small">
-        Schedule &amp; realtime data provided by Metra. Not affiliated with Metra.
-        <span id="data-version"></span>
-      </footer>
     </aside>
 
     <section class="map-wrap">
@@ -266,9 +265,12 @@
     <section class="settings-card">
       <div class="card-head"><h3>About</h3></div>
       <dl id="settings-about" class="kv"></dl>
-      <p class="muted small">Schedule &amp; realtime data provided by Metra. Not affiliated with Metra.</p>
     </section>
     <div class="settings-foot"><button type="button" id="settings-done" class="primary-btn">Done</button></div>
+    <footer class="settings-credits muted small">
+      Schedule &amp; realtime data provided by Metra. Not affiliated with Metra.
+      <span id="data-version"></span>
+    </footer>
     </div>
   </section>
 

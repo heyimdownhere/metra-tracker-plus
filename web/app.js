@@ -1070,16 +1070,65 @@
     const d = state.departures;
     const routes = new Set(((d && d.departures) || []).map((r) => r.route_id));
     const hits = view.alerts === "off" ? []
-      : (state.alerts || []).filter((a) => a.schedule_change && a.routes.some((r) => routes.has(r.id)));
-    el.hidden = !hits.length;
-    if (!hits.length) return;
+      : (state.alerts || []).filter((a) => a.schedule_change && a.routes.some((r) => routes.has(r.id)))
+        .sort((x, y) => noticeHidden.has(x.id) - noticeHidden.has(y.id));  // ones you haven't hidden first
+    noticeIds = hits.map((a) => a.id);
+    // Hidden once swiped away / ✕'d, until a schedule-change alert we haven't hidden shows up.
+    const show = hits.length && !hits.every((a) => noticeHidden.has(a.id));
+    el.hidden = !show;
+    el.style.transform = ""; el.style.opacity = "";
+    if (!show) return;
     const lines = [...new Set(hits.flatMap((a) => a.routes.filter((r) => routes.has(r.id)).map((r) => r.short_name)))];
-    el.innerHTML = `<span class="badge schedchg">Schedule change</span>
+    $("board-notice-main").innerHTML = `<span class="badge schedchg">Schedule change</span>
       <span class="txt"><b>${esc(lines.join(", "))}:</b> ${esc(hits[0].header)}</span>
       ${hits.length > 1 ? `<span class="more">+${hits.length - 1}</span>` : ""}`;
     el.title = hits.map((a) => a.header).join("\n");
   }
-  $("board-notice").addEventListener("click", (e) => {
+  // Hidden schedule-change strips (alert ids), kept on this device.
+  const NOTICE_KEY = "metra.notice.hidden";
+  let noticeIds = [];
+  let noticeHidden = new Set();
+  try { noticeHidden = new Set(JSON.parse(localStorage.getItem(NOTICE_KEY) || "[]")); } catch (e) { /* ignore */ }
+  function hideNotice() {
+    const live = new Set((state.alerts || []).map((a) => a.id));
+    noticeHidden = new Set([...noticeHidden, ...noticeIds].filter((id) => live.has(id)));
+    localStorage.setItem(NOTICE_KEY, JSON.stringify([...noticeHidden]));
+    $("board-notice").hidden = true;
+  }
+  $("board-notice-x").addEventListener("click", (e) => { e.stopPropagation(); hideNotice(); });
+  // Swipe left or right to hide it.
+  (() => {
+    const el = $("board-notice");
+    let x0 = null, dx = 0, dragged = false;
+    el.addEventListener("pointerdown", (e) => { x0 = e.clientX; dx = 0; dragged = false; });
+    el.addEventListener("pointermove", (e) => {
+      if (x0 === null) return;
+      dx = e.clientX - x0;
+      if (Math.abs(dx) > 8) {
+        dragged = true;
+        el.style.transition = "none";
+        el.style.transform = `translateX(${dx}px)`;
+        el.style.opacity = String(Math.max(0.2, 1 - Math.abs(dx) / 260));
+      }
+    });
+    const end = () => {
+      if (x0 === null) return;
+      x0 = null;
+      el.style.transition = "transform .2s ease, opacity .2s ease";
+      if (Math.abs(dx) > 90) {
+        el.style.transform = `translateX(${dx > 0 ? 120 : -120}%)`;
+        el.style.opacity = "0";
+        setTimeout(hideNotice, 200);
+      } else {
+        el.style.transform = ""; el.style.opacity = "";
+      }
+    };
+    el.addEventListener("pointerup", end);
+    el.addEventListener("pointercancel", end);
+    // A swipe isn't a tap: don't open the alerts after one.
+    el.addEventListener("click", (e) => { if (dragged) { e.stopPropagation(); e.preventDefault(); dragged = false; } }, true);
+  })();
+  $("board-notice-main").addEventListener("click", (e) => {
     if (view.alerts === "bell") { e.stopPropagation(); setBell(true); }
     else { $("alerts-list").hidden = false; $("alerts-toggle").setAttribute("aria-expanded", "true"); $("alerts").scrollIntoView({ behavior: "smooth" }); }
   });
