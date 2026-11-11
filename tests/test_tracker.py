@@ -820,3 +820,16 @@ def test_destinations_are_direct_trains_nearest_first(tracker):
     assert {x["direction"] for x in d} == {"inbound"}  # Central is near the Loop
     assert tracker.destinations("C") == []  # last stop: nothing further on
     assert [x["id"] for x in tracker.destinations("B")] == ["C"]
+
+
+def test_live_train_snaps_onto_its_track(tracker):
+    _apply(tracker, [])
+    at = datetime(2026, 11, 9, 8, 5, tzinfo=TZ).timestamp()
+    # About 40 m north of the track between Alpha and Bravo (which runs along lat 41.90).
+    tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.90036, -88.05, at)))
+    t = next(x for x in tracker._live_trains(at) if x["trip_id"] == "t-0800")
+    assert abs(t["lat"] - 41.90) < 1e-6 and abs(t["lon"] + 88.05) < 1e-4
+    # Far from the track (a yard 1 km away): left where GPS says.
+    tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.91, -88.05, at)))
+    t = next(x for x in tracker._live_trains(at) if x["trip_id"] == "t-0800")
+    assert abs(t["lat"] - 41.91) < 1e-4

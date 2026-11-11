@@ -455,7 +455,6 @@ dialog.sheet::backdrop { background: rgba(0, 0, 0, .55); }
 .train-marker.selected { z-index: 5 !important; }
 .train-marker.selected .train-dot { transform: scale(1.35); box-shadow: 0 0 0 4px var(--accent), 0 0 0 7px color-mix(in srgb, var(--accent) 35%, transparent); }
 .popup-board { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); font-size: 12px; }
-.popup-show { flex: none; padding: 4px 9px; border-radius: 7px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font-weight: 700; font-size: 12px; cursor: pointer; }
 
 /* ---- timetable only (map hidden) ---- */
 body.no-map .map-wrap { display: none; }

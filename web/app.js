@@ -94,7 +94,7 @@
     const row = d && t.trip_id && (d.departures || []).find((r) => r.trip_id === t.trip_id);
     const from = d && d.station ? d.station.name : "";
     const foot = row
-      ? `<div class="popup-board"><span>Leaves ${esc(from)} <b>${esc(fmtTime(row.time))}</b></span><button type="button" class="popup-show" data-trip="${esc(t.trip_id)}">Show on board</button></div>`
+      ? `<div class="popup-board"><span>Leaves ${esc(from)} <b>${esc(fmtTime(row.time))}</b></span></div>`
       : (from ? `<div class="popup-board muted">Not in the ${esc(from)} list</div>` : "");
     return `<div class="popup"><h3>${title}</h3><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${foot}</div>`;
   }
@@ -106,7 +106,8 @@
     // A train tapped on the map: highlight it on the board too.
     onTrainSelect: (t) => {
       state.selectedTrip = t ? t.trip_id : null;
-      markBoardSelection(false);
+      // Highlight its row; on a computer also scroll the board to it (on a phone that would leave the map).
+      markBoardSelection(!narrow());
     },
   });
 
@@ -152,13 +153,6 @@
     if (e.key !== "Enter" && e.key !== " ") return;
     const li = e.target.closest(".dep[data-trip]");
     if (li) { e.preventDefault(); pickBoardTrain(li); }
-  });
-  // "Show on board" in a map popup.
-  document.addEventListener("click", (e) => {
-    const b = e.target.closest(".popup-show");
-    if (!b) return;
-    state.selectedTrip = b.dataset.trip;
-    if (!markBoardSelection(true)) return;
   });
 
   async function refreshTrains() {

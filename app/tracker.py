@@ -30,6 +30,7 @@ USER_AGENT = "metra-tracker-plus/1.0 (self-hosted)"
 
 # A vehicle position older than this is dropped from the map (it stopped reporting).
 STALE_VEHICLE_SECONDS = 180
+SNAP_MAX_M = 150  # GPS points this close to the drawn track are moved onto it
 # On-time history shown on the board: look back this many days, and only show
 # stats once a departure has been seen on at least this many days.
 BOARD_HISTORY_DAYS = 30
@@ -1223,6 +1224,32 @@ class Tracker:
                 return (pred or {}).get("delay"), s.stop_name(sts[-1][S_STOP])
         return None, None
 
+    def _snap_to_shape(self, trip_id: str | None, lat: float, lon: float) -> tuple[float, float]:
+        """Move a GPS point onto the trip's drawn track (shapes.txt) if it's close.
+
+        GPS fixes are often a few dozen metres off, which puts the marker beside
+        the line on the map. Points further than SNAP_MAX_M stay where they are.
+        """
+        s = self.static
+        shape = s.shapes.get(s.trips[trip_id][T_SHAPE]) if s and trip_id in s.trips else None
+        if not shape or len(shape) < 2:
+            return lat, lon
+        coslat = math.cos(math.radians(lat))
+        best = None
+        for (alat, alon), (blat, blon) in zip(shape, shape[1:]):
+            ax, ay = (alon - lon) * 111320 * coslat, (alat - lat) * 110540
+            bx, by = (blon - lon) * 111320 * coslat, (blat - lat) * 110540
+            dx, dy = bx - ax, by - ay
+            seg2 = dx * dx + dy * dy
+            f = 0.0 if seg2 == 0 else max(0.0, min(1.0, -(ax * dx + ay * dy) / seg2))
+            px, py = ax + f * dx, ay + f * dy
+            d2 = px * px + py * py
+            if best is None or d2 < best[0]:
+                best = (d2, alat + f * (blat - alat), alon + f * (blon - alon))
+        if best is None or best[0] > SNAP_MAX_M ** 2:
+            return lat, lon
+        return best[1], best[2]
+
     def _live_trains(self, now: float) -> list[dict]:
         s = self.static
         out = []
@@ -1255,6 +1282,7 @@ class Tracker:
             if v.stop_id and s and v.status is not None:
                 # VehicleStopStatus: 0 INCOMING_AT, 1 STOPPED_AT, 2 IN_TRANSIT_TO
                 next_stop = s.stop_name(v.stop_id)
+            snapped = self._snap_to_shape(trip_id, v.lat, v.lon)
             out.append({
                 "id": v.key,
                 "train": (s.trips[trip_id][T_SHORT_NAME] if trip_id else None) or labels.get(trip_id or "") or v.label,
@@ -1265,8 +1293,8 @@ class Tracker:
                 "color": route.get("color", "#888888"),
                 "text_color": route.get("text_color", "#FFFFFF"),
                 "destination": s.trip_destination(trip_id) if (s and trip_id) else None,
-                "lat": v.lat,
-                "lon": v.lon,
+                "lat": snapped[0],
+                "lon": snapped[1],
                 "bearing": v.bearing,
                 "delay": delay,
                 "delay_reason": (
