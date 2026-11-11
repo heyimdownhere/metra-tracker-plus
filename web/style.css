@@ -667,3 +667,14 @@ html.theme-anim, html.theme-anim *, html.theme-anim *::before, html.theme-anim *
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .01ms !important; animation-delay: 0s !important; transition-duration: .01ms !important; }
 }
+
+.station-list li.disabled { cursor: not-allowed; opacity: .5; }
+.station-list li.disabled:hover { background: none; }
+
+.toast {
+  position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 2000;
+  max-width: min(440px, calc(100vw - 32px)); padding: 10px 16px; border-radius: 12px; font-size: 14px;
+  background: var(--panel); color: var(--text); border: 1px solid var(--border); box-shadow: var(--shadow);
+  --enter: toast-in; --leave: fade-out;
+}
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 10px); } to { opacity: 1; transform: translate(-50%, 0); } }

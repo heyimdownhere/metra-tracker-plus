@@ -68,6 +68,19 @@
     clearTimeout(container._animT);
     container._animT = setTimeout(() => container.classList.remove("list-enter"), 700);
   }
+  // A short message at the bottom of the screen.
+  function toast(text) {
+    let el = document.getElementById("toast");
+    if (!el) {
+      el = document.createElement("div");
+      el.id = "toast"; el.className = "toast"; el.setAttribute("role", "status"); el.hidden = true;
+      document.body.appendChild(el);
+    }
+    el.textContent = text;
+    enter(el);
+    clearTimeout(el._t);
+    el._t = setTimeout(() => leave(el), 4000);
+  }
   function fadeIn(el) {
     if (!el || reduceMotion()) return;
     el.classList.remove("fade-in");
@@ -265,13 +278,26 @@
   // Going-to suggestions: only stations with a direct train from "From",
   // grouped by direction and nearest first. Loaded once per From station.
   state.dests = {};
-  async function loadDests(id) {
-    if (!id || state.dests[id]) return;
-    try { state.dests[id] = await api(`/api/destinations?station=${encodeURIComponent(id)}`); } catch (e) { console.warn(e); }
+  const destsLoading = {};
+  function loadDests(id) {
+    if (!id || state.dests[id]) return Promise.resolve();
+    if (!destsLoading[id]) {
+      destsLoading[id] = api(`/api/destinations?station=${encodeURIComponent(id)}`)
+        .then((list) => { state.dests[id] = list; })
+        .catch((e) => { console.warn(e); state.dests[id] = "error"; })
+        .finally(() => { delete destsLoading[id]; });
+    }
+    return destsLoading[id];
   }
   function destSuggestions(q) {
     const list = state.station && state.dests[state.station];
-    if (!list) return stationMatches(q);
+    if (list === "error") return stationMatches(q);  // couldn't load: don't block picking
+    if (!list) {
+      if (!state.station) return stationMatches(q);
+      // Not loaded yet: wait for it rather than offering every station.
+      loadDests(state.station).then(() => toPicker.refresh());
+      return [{ header: "Loading stations…" }];
+    }
     const reach = new Map(list.map((d) => [d.id, d]));
     const withHint = (st) => ({ ...st, hint: `${reach.get(st.id).minutes} min` });
     const from = state.stationById.get(state.station);
@@ -285,11 +311,13 @@
       }
       return out.length ? out : [{ header: `No direct trains from ${from ? from.name : "here"}` }];
     }
-    // Typing: direct-train stations first, then anything else that matches.
+    // Typing: only stations with a direct train can be picked. Others that match are
+    // shown greyed out with their line, so it's clear why they aren't offered.
     const all = stationMatches(q).filter((st) => st.id !== state.station);
     const direct = all.filter((st) => reach.has(st.id)).map(withHint);
-    const other = all.filter((st) => !reach.has(st.id));
-    return direct.concat(other.length ? [{ header: "No direct train" }, ...other] : []);
+    const other = all.filter((st) => !reach.has(st.id)).slice(0, 8)
+      .map((st) => ({ ...st, disabled: true, hint: "no direct train" }));
+    return direct.concat(other.length ? [{ header: `No direct train from ${from ? from.name : "here"}` }, ...other] : []);
   }
 
   function makePicker({ inputId, listId, getValue, onSelect, allowClear, clearLabel = "Any destination", suggest = stationMatches }) {
@@ -305,13 +333,14 @@
     }
     function render() {
       const items = suggest(input.value).slice(0, 120);
-      matches = items.filter((x) => !x.header);
+      matches = items.filter((x) => !x.header && !x.disabled);
       active = matches.length ? 0 : -1;
       const clear = allowClear && getValue() ? `<li role="option" data-id="" class="clear-opt">${esc(clearLabel)}</li>` : "";
       let i = -1;
       list.innerHTML = clear + (items.length
         ? items.map((st) => {
           if (st.header) return `<li class="group" role="presentation">${esc(st.header)}</li>`;
+          if (st.disabled) return `<li class="disabled" aria-disabled="true"><span>${esc(st.name)} <small class="muted">${esc(st.hint || "")}</small></span><span class="chips">${routeChips(st.routes)}</span></li>`;
           i += 1;
           return `<li role="option" id="${listId}-${i}" data-id="${esc(st.id)}" aria-selected="${i === active}"><span>${esc(st.name)}${st.hint ? ` <small class="muted">${esc(st.hint)}</small>` : ""}</span><span class="chips">${routeChips(st.routes)}</span></li>`;
         }).join("")
@@ -351,7 +380,11 @@
       if (li) { e.preventDefault(); choose(li.dataset.id); }
     });
     input.addEventListener("blur", () => setTimeout(() => { open(false); input.value = current(); }, 120));
-    return { sync: () => { input.value = current(); }, open: () => input.focus() };
+    return {
+      sync: () => { input.value = current(); },
+      open: () => input.focus(),
+      refresh: () => { if (!list.hidden && document.activeElement === input) render(); },
+    };
   }
 
   const fromPicker = makePicker({
@@ -415,7 +448,16 @@
     state.station = id;
     state.line = null;
     localStorage.setItem(STATION_KEY, id);
-    loadDests(id);
+    loadDests(id).then(() => {
+      if (state.station !== id) return;
+      // A "Going to" with no direct train from the new From station can't show anything: drop it.
+      const reach = state.dests[id];
+      if (state.dest && Array.isArray(reach) && !reach.some((x) => x.id === state.dest)) {
+        const gone = state.stationById.get(state.dest);
+        selectDest("");
+        toast(`No direct train from ${st.name} to ${gone ? gone.name : "that station"}, so "Going to" was cleared.`);
+      } else renderBoard();
+    });
     if (state.dest === id) selectDest("", { refresh: false });
     fromPicker.sync();
     $("board-title").textContent = st.name;
@@ -766,7 +808,13 @@
     if (d.tab === "timetable") { renderTimetable(d, now, from); return; }
     if (!d.departures.length) {
       $("board-list").innerHTML = "";
-      showEmpty(d.to
+      const reach = state.dests[d.station && d.station.id];
+      const toSt = d.to && state.stationById.get(d.to.id);
+      const noDirect = d.to && Array.isArray(reach) && !reach.some((x) => x.id === d.to.id);
+      const toLines = toSt ? toSt.routes.join(", ") : "";
+      showEmpty(noDirect
+        ? `There's no direct train from ${from} to ${d.to.name}${toLines ? ` (it's on the ${toLines} line${toSt.routes.length > 1 ? "s" : ""})` : ""}. Pick another "Going to" station, or tap Clear.`
+        : d.to
         ? `No upcoming trains from ${from} to ${d.to.name}. They may be on different lines; try "Any destination".`
         : "No upcoming departures found in the schedule.");
       return;
