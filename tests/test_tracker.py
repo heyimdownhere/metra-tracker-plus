@@ -756,3 +756,40 @@ def test_map_trains_only_those_still_going_to_a_station(tracker):
     # With a From station: only trains running From -> To.
     assert "t-0800" in {t["trip_id"] for t in tracker.trains(at, to="C", frm="A")["trains"]}
     assert "t-0800" not in {t["trip_id"] for t in tracker.trains(at, to="A", frm="C")["trains"]}
+
+
+def test_train_standing_at_platform_stays_on_board_when_gps_fix_ages(tracker):
+    # Same as above, but we look 2 minutes after the last GPS fix, with the train still at Bravo.
+    _apply(tracker, [])
+    fix = datetime(2026, 11, 9, 8, 16, tzinfo=TZ).timestamp()
+    tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.90, -88.00, fix)))
+    tracker._gps = tracker._gps_estimates(fix)
+    later = fix + 120
+    r = next((r for r in tracker.departures("B", now=later)["departures"] if r["trip_id"] == "t-0800"), None)
+    assert r is not None and r["tracking"] and r["time"] >= later
+
+
+def test_board_train_number_not_taken_from_next_trips_train_set(tracker):
+    # Metra's update for a later trip names the train set that will run it (currently
+    # running another trip). That isn't this trip's train number.
+    tu = _tu("t-0830", [("A", 0)])
+    tu.trip_update.vehicle.label = "1294"
+    _apply(tracker, [tu])
+    r = next(r for r in tracker.departures("A", now=NOW)["departures"] if r["trip_id"] == "t-0830")
+    assert r["train"] is None
+    # While a train is actually running the trip, its label is the train number.
+    tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0830", 41.90, -88.10, NOW)))
+    tracker._reindex_realtime()
+    r = next(r for r in tracker.departures("A", now=NOW)["departures"] if r["trip_id"] == "t-0830")
+    assert r["train"] == "91"
+
+
+def test_map_filter_uses_gps_delay(tracker):
+    # t-0800 is due at Bravo 8:10; at 8:16 GPS shows it still at Bravo (6 min late),
+    # so it hasn't left Bravo yet and stays on a map filtered to trains from Alpha to Bravo.
+    _apply(tracker, [])
+    at = datetime(2026, 11, 9, 8, 16, tzinfo=TZ).timestamp()
+    tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.90, -88.00, at)))
+    tracker._gps = tracker._gps_estimates(at)
+    tracker._trains_cache = None
+    assert "t-0800" in {t["trip_id"] for t in tracker.trains(at + 90, to="B", frm="A")["trains"]}

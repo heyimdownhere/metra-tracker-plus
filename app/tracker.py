@@ -156,6 +156,7 @@ class Tracker:
         self.rt = rtp.RealtimeSnapshot()
         self._rt_by_trip: dict[str, _TripRT] = {}
         self._added_trips: list[rtp.TripUpdateInfo] = []
+        self._running_labels: dict[str, str] = {}
         self._alerts_by_trip: dict[str, list[rtp.AlertInfo]] = {}
         self._alerts_by_route: dict[str, list[rtp.AlertInfo]] = {}
         self._tasks: list[asyncio.Task] = []
@@ -430,6 +431,16 @@ class Tracker:
             by_trip[sid] = _TripRT(tu, sdate)
         self._rt_by_trip = by_trip
         self._added_trips = added
+        # Train numbers from the positions feed, for trips a train is running right now.
+        # (Trip updates for later trips name the train set that will run them, which is
+        # usually still out on another trip with a different number.)
+        running: dict[str, str] = {}
+        for v in self.rt.vehicles:
+            if static and v.trip and v.label:
+                sid = static.resolve_trip(v.trip.trip_id, v.trip.route_id, v.trip.start_time, v.trip.start_date, v.trip.direction_id)
+                if sid:
+                    running[sid] = v.label
+        self._running_labels = running
 
         alerts_by_trip: dict[str, list[rtp.AlertInfo]] = {}
         alerts_by_route: dict[str, list[rtp.AlertInfo]] = {}
@@ -614,12 +625,16 @@ class Tracker:
             "service_date": d,
         }
 
-    def _gps_pred(self, trip_id: str, d: date, seq: int, sched: float) -> dict | None:
+    def _gps_pred(self, trip_id: str, d: date, seq: int, sched: float, now: float | None = None) -> dict | None:
         """A prediction-shaped dict from a GPS estimate, for a stop the train hasn't passed."""
         est = self._gps.get(trip_id)
         if not est or est.get("finished") or est["service_date"] != d or seq < est["next_seq"]:
             return None
-        return {"time": sched + est["delay"], "delay": est["delay"], "skipped": False,
+        t = sched + est["delay"]
+        if est.get("at_station") and seq == est["next_seq"] and now is not None:
+            # Standing at this platform: it leaves now-ish, however old the GPS fix is.
+            t = max(t, now)
+        return {"time": t, "delay": max(est["delay"], int(t - sched)), "skipped": False,
                 "cancelled": False, "gps": True}
 
     def station_label(self, station_id: str) -> str:
@@ -745,7 +760,7 @@ class Tracker:
                     if self.realtime_live and self._rt_matches_date(trip_id, d):
                         pred = self._predict(trip_id, seq, base)
                     if pred is None and self._gps:
-                        pred = self._gps_pred(trip_id, d, seq, sched)
+                        pred = self._gps_pred(trip_id, d, seq, sched, now)
                     if pred and pred["skipped"]:
                         continue
                     if pred and pred["time"] and pred["time"] < sched:
@@ -1004,7 +1019,7 @@ class Tracker:
             "final_arrival": final_arrival,
             "final_arrival_scheduled": final_sched,
             "trip_id": trip_id,
-            "train": trip[T_SHORT_NAME] or (self._rt_by_trip[trip_id].update.vehicle_label if trip_id in self._rt_by_trip else None),
+            "train": trip[T_SHORT_NAME] or self._running_labels.get(trip_id),
             "route_id": trip[T_ROUTE],
             "route_name": route.get("long_name", trip[T_ROUTE]),
             "route_short": route.get("short_name", trip[T_ROUTE]),
@@ -1113,10 +1128,13 @@ class Tracker:
         if d is None:
             return False
         base = s.service_day_start(d)
+        sched = base + stop[S_ARR]
         pred = self._predict(trip_id, stop[S_SEQ], base) if self.realtime_live else None
+        if pred is None and self._gps:
+            pred = self._gps_pred(trip_id, d, stop[S_SEQ], sched, now)  # no Metra prediction: use GPS delay
         if pred and (pred["skipped"] or pred["cancelled"]):
             return False
-        t = pred["time"] if pred and pred["time"] else base + stop[S_ARR] + ((pred or {}).get("delay") or 0)
+        t = pred["time"] if pred and pred["time"] else sched + ((pred or {}).get("delay") or 0)
         return t >= now - 60
 
     def _all_trains(self, now: float) -> dict:
