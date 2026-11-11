@@ -549,6 +549,8 @@
     return `<div class="hist" title="Based on the last ${h.days} days of Metra's predictions for this train at this station (weekdays, Saturdays and Sundays counted separately). Metra counts under 6 minutes late as on time.">${parts.map((x) => `<span class="part">${x}</span>`).join(" · ")}</div>`;
   }
 
+  const untilText = (m) => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr${m % 60 ? ` ${m % 60} min` : ""}`);
+
   // Today's timetable: every train still to come, compact, grouped by hour.
   function renderTimetable(d, now, from) {
     const el = $("tt");
@@ -583,7 +585,7 @@
           <span class="tt-top">${chip(r.route_short, r.color, r.text_color)}${r.train ? `<span class="muted">#${esc(r.train)}</span>` : ""}${status}${r.schedule_change ? '<span class="badge schedchg">Changed</span>' : ""}</span>
           <span class="tt-where">${where}</span>
         </span>
-        <span class="tt-mins">${r.cancelled ? "" : r === next || mins < 60 ? (mins <= 0 ? "Now" : `${mins} min`) : ""}</span>
+        <span class="tt-mins">${r.cancelled ? "" : r === next || mins < 60 ? (mins <= 0 ? "Now" : untilText(mins)) : ""}</span>
       </li>`);
     }
     html.push("</ol>");
@@ -610,7 +612,10 @@
     showEmpty("");
     $("board-list").innerHTML = setupCardHtml() + d.departures.map((r) => {
       const mins = Math.max(0, Math.round((r.time - now) / 60));
-      const minsHtml = r.cancelled ? "<b>—</b>" : mins === 0 ? "<b>Now</b>" : `<b>${mins}</b><span>min</span>`;
+      // Under an hour: "45 min". From an hour: "2 hr" with the minutes underneath.
+      const minsHtml = r.cancelled ? "<b>—</b>" : mins === 0 ? "<b>Now</b>"
+        : mins < 60 ? `<b>${mins}</b><span>min</span>`
+        : `<b>${Math.floor(mins / 60)}<small>hr</small></b><span>${mins % 60 ? `${mins % 60} min` : "&nbsp;"}</span>`;
       const changed = r.scheduled && Math.abs(r.time - r.scheduled) >= 60;
       const badge = r.cancelled ? '<span class="badge cancel">Cancelled</span>'
         : r.live ? '<span class="badge live">Live</span>'

@@ -194,6 +194,8 @@ button { font: inherit; color: inherit; }
 .dep .mins { grid-row: 1 / span 2; grid-column: 3; text-align: right; font-variant-numeric: tabular-nums; }
 .dep .mins b { display: block; font-size: 22px; line-height: 1; }
 .dep .mins span { font-size: 11px; color: var(--muted); }
+.dep .mins b small { font-size: 13px; font-weight: 600; margin-left: 2px; color: var(--muted); }
+.dep .mins span { white-space: nowrap; }
 .dep .main { grid-column: 2; min-width: 0; }
 .dep .timecol { grid-row: 1 / span 2; }
 .dep.cancelled .dest, .dep.cancelled .time { text-decoration: line-through; opacity: .6; }
