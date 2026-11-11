@@ -1,28 +1,28 @@
 <?xml version="1.0"?>
 <Container version="2">
-  <Name>metra-tracker-plus</Name>
-  <Repository>ghcr.io/heyimdownhere/metra-tracker-plus:latest</Repository>
-  <Registry>https://github.com/heyimdownhere/metra-tracker-plus/pkgs/container/metra-tracker-plus</Registry>
+  <Name>next-stop</Name>
+  <Repository>ghcr.io/heyimdownhere/next-stop:latest</Repository>
+  <Registry>https://github.com/heyimdownhere/next-stop/pkgs/container/next-stop</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support/>
-  <Project>https://github.com/heyimdownhere/metra-tracker-plus</Project>
+  <Project>https://github.com/heyimdownhere/next-stop</Project>
   <Overview>Self-hosted live Metra train tracker: map of all lines with live train positions, a departure board for your station, service alerts, long-term delay history, and a Home Assistant-friendly commute API. Uses Metra's GTFS schedule and GTFS-Realtime feeds (server-side only). Runs schedule-only until METRA_API_TOKEN is set.</Overview>
   <Category>Tools: Status:Stable</Category>
   <WebUI>http://[IP]:[PORT:8080]</WebUI>
-  <TemplateURL>https://raw.githubusercontent.com/heyimdownhere/metra-tracker-plus/main/unraid/metra-tracker-plus.xml</TemplateURL>
-  <Icon>https://raw.githubusercontent.com/heyimdownhere/metra-tracker-plus/main/web/icon-192.png</Icon>
+  <TemplateURL>https://raw.githubusercontent.com/heyimdownhere/next-stop/main/unraid/next-stop.xml</TemplateURL>
+  <Icon>https://raw.githubusercontent.com/heyimdownhere/next-stop/main/web/icon-192.png</Icon>
   <ExtraParams>--restart=unless-stopped</ExtraParams>
   <PostArgs/>
   <CPUset/>
   <DateInstalled/>
   <DonateText/>
   <DonateLink/>
-  <Requires>Uses the image published by the project on GitHub (ghcr.io/heyimdownhere/metra-tracker-plus). To run a locally built image instead, set Repository to metra-tracker-plus:latest. See README.</Requires>
+  <Requires>Uses the image published by the project on GitHub (ghcr.io/heyimdownhere/next-stop). To run a locally built image instead, set Repository to next-stop:latest. See README.</Requires>
   <Config Name="Web UI port" Target="8080" Default="8080" Mode="tcp" Description="Port you open in the browser (http://SERVER-IP:THIS-PORT). Change this one if 8080 is taken on your server." Type="Port" Display="always" Required="true" Mask="false">8080</Config>
-  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/metra-tracker" Mode="rw" Description="Cached Metra schedule and history database." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/metra-tracker</Config>
+  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/next-stop" Mode="rw" Description="Cached Metra schedule and history database." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/next-stop</Config>
   <Config Name="Metra API key" Target="METRA_API_TOKEN" Default="" Mode="" Description="Your Metra GTFS-Realtime API key. Leave empty for schedule-only mode." Type="Variable" Display="always" Required="false" Mask="true"></Config>
   <Config Name="Home station" Target="HOME_STATION" Default="" Mode="" Description="Optional default home station: an id like EVANSTON or a name like Evanston (Davis St.). Used until 'Set as home' is tapped in the app. Ids are listed at /api/stations." Type="Variable" Display="always" Required="false" Mask="false"></Config>
   <Config Name="Work station" Target="WORK_STATION" Default="" Mode="" Description="Optional work station (id or name, e.g. OTC). On workdays the app opens on home to work before the switch time and work to home after it. Can also be set in the app (briefcase button)." Type="Variable" Display="always" Required="false" Mask="false"></Config>

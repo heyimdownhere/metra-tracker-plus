@@ -38,7 +38,7 @@ DEFAULT_MAX_ZOOM = 15
 BUILDS_JSON = "https://build-metadata.protomaps.dev/builds.json"
 BUILD_URL = "https://build.protomaps.com/{name}"
 ASSETS_BASE = "https://protomaps.github.io/basemaps-assets"
-USER_AGENT = "metra-tracker-plus/1.0 (self-hosted map extract)"
+USER_AGENT = "next-stop/1.0 (self-hosted map extract)"
 
 # Asset paths the browser may ask for (fonts and sprites for the bundled styles).
 ASSET_RE = re.compile(

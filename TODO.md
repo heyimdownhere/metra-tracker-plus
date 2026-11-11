@@ -1,4 +1,4 @@
-# Metra Tracker+: what's left
+# Next Stop: what's left
 
 Updated 2026-11-11. The app runs on the home server against Metra's **real** schedule and **live** feeds. 66 tests pass. CI is green and publishes a ready-to-run Docker image on every push to `main`. What's left is real-world checks, Home Assistant, and new features.
 

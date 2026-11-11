@@ -1,6 +1,6 @@
 {
-  "name": "Metra Tracker+",
-  "short_name": "Metra+",
+  "name": "Next Stop",
+  "short_name": "Next Stop",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#0f1216",

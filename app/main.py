@@ -129,7 +129,7 @@ async def lifespan(_: FastAPI):
     await tracker.stop()
 
 
-app = FastAPI(title="Metra Tracker Plus", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
+app = FastAPI(title="Next Stop", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
 # Compress JSON and the JS/CSS bundles (the map library alone is ~1 MB): keeps
 # phone data use down.
 app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)

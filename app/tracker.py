@@ -26,7 +26,7 @@ from .static_gtfs import (
 
 log = logging.getLogger(__name__)
 
-USER_AGENT = "metra-tracker-plus/1.0 (self-hosted)"
+USER_AGENT = "next-stop/1.0 (self-hosted)"
 
 # A vehicle position older than this is dropped from the map (it stopped reporting).
 STALE_VEHICLE_SECONDS = 180

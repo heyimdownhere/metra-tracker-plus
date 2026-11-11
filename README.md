@@ -1,6 +1,6 @@
-# Metra Tracker+
+# Next Stop
 
-Better Metra tracker for phone and data usage.
+A Chicago commuter-rail tracker that's quick to read and light on phone data. Uses Metra's public schedule and realtime data; not sponsored, affiliated, or operated by Metra.
 
 A self-hosted web app that shows live Metra trains. It runs in Docker on a home server (an Unraid template is included) and you open it in a browser on any phone, tablet or computer on your network: `http://<your-server-ip>:8080`.
 
@@ -66,19 +66,19 @@ It's light on your phone's data: the server talks to Metra, and your phone only 
 
 ## Install on Unraid
 
-GitHub builds and publishes a ready-to-run image (`ghcr.io/heyimdownhere/metra-tracker-plus:latest`) on every push to `main`, and the Unraid template uses it. Nothing needs building.
+GitHub builds and publishes a ready-to-run image (`ghcr.io/heyimdownhere/next-stop:latest`) on every push to `main`, and the Unraid template uses it. Nothing needs building.
 
 1. **Add the template.** Open a terminal on Unraid (**>_** icon at top right of the web UI) and run:
    ```sh
-   wget -O /boot/config/plugins/dockerMan/templates-user/my-metra-tracker-plus.xml \
-     https://raw.githubusercontent.com/heyimdownhere/metra-tracker-plus/main/unraid/metra-tracker-plus.xml
+   wget -O /boot/config/plugins/dockerMan/templates-user/my-next-stop.xml \
+     https://raw.githubusercontent.com/heyimdownhere/next-stop/main/unraid/next-stop.xml
    ```
-2. **Create the container.** **Docker → Add Container**, then choose **metra-tracker-plus** in the **Template** dropdown (under *User templates*).
+2. **Create the container.** **Docker → Add Container**, then choose **next-stop** in the **Template** dropdown (under *User templates*).
 3. **Fill in the fields:**
    - **Metra API key**: your key (the field is masked). Leave it empty to run schedule-only.
    - **Home station / Work station / Commute switch time / Workdays**: optional; you can set these in the app instead (⚙ Settings → Edit commute). Stations can be an id (`NAPERVILLE`, `CUS`) or a name.
    - **Web UI port**: 8080, unless that's taken on your server.
-   - **Appdata**: `/mnt/user/appdata/metra-tracker` (default).
+   - **Appdata**: `/mnt/user/appdata/next-stop` (default).
    - More options are under **Show more settings**.
 4. Click **Apply**. Unraid pulls the image and starts the container.
 5. Open `http://<your-server-ip>:8080`, or click the container icon → **WebUI**. On first start it downloads Metra's schedule, which takes a few seconds.
@@ -100,11 +100,11 @@ docker compose up -d
 ### Build the image yourself
 
 ```sh
-git clone https://github.com/heyimdownhere/metra-tracker-plus.git
-docker build -t metra-tracker-plus:latest metra-tracker-plus
+git clone https://github.com/heyimdownhere/next-stop.git
+docker build -t next-stop:latest next-stop
 ```
 
-Then use `metra-tracker-plus:latest` as the image (Unraid: the template's **Repository** field; compose: `IMAGE=metra-tracker-plus:latest`).
+Then use `next-stop:latest` as the image (Unraid: the template's **Repository** field; compose: `IMAGE=next-stop:latest`).
 
 ### Backing up
 

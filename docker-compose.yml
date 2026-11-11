@@ -1,16 +1,16 @@
 # Settings come from a .env file next to this one (copy .env.example to .env).
 # Every value has a default, so `docker compose up -d` works with no .env.
 services:
-  metra-tracker-plus:
-    image: ${IMAGE:-ghcr.io/heyimdownhere/metra-tracker-plus:latest}
+  next-stop:
+    image: ${IMAGE:-ghcr.io/heyimdownhere/next-stop:latest}
     build: .
-    container_name: metra-tracker-plus
+    container_name: next-stop
     restart: unless-stopped
     ports:
       # Host port (what you type in the browser) : port inside the container.
       - "${WEB_PORT:-8080}:${PORT:-8080}"
     volumes:
-      - ${APPDATA:-/mnt/user/appdata/metra-tracker}:/config
+      - ${APPDATA:-/mnt/user/appdata/next-stop}:/config
     environment:
       METRA_API_TOKEN: ${METRA_API_TOKEN:-}
       TZ: ${TZ:-America/Chicago}

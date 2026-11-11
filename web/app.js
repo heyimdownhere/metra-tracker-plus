@@ -1,4 +1,4 @@
-/* Metra Tracker+ frontend. Talks only to this server's /api endpoints. */
+/* Next Stop frontend. Talks only to this server's /api endpoints. */
 (function () {
   "use strict";
 

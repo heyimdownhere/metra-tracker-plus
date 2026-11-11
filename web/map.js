@@ -1,4 +1,4 @@
-/* Map for Metra Tracker+: MapLibre GL with switchable basemaps, opacity
+/* Map for Next Stop: MapLibre GL with switchable basemaps, opacity
  * controls, 3D buildings and layer toggles. Exposes window.MetraMap. */
 (function () {
   "use strict";
