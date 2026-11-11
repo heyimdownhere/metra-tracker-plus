@@ -401,17 +401,22 @@
   $("board-swap").addEventListener("click", () => $("swap-btn").click());
 
   // "Clear": drop the Going-to station and any selected train, and show every train.
+  // Clear everything: From, Going to, any line view and selected train. The map
+  // shows every train; "To home"/"To work" brings the commute back.
   function clearView() {
     state.selectedTrip = null;
     state.line = null;
     mapView.clearSelection(false);
     mapView.closePopups();
-    markBoardSelection(false);
-    selectDest("");
+    state.station = null;
+    localStorage.removeItem(STATION_KEY);
+    fromPicker.sync();
+    selectDest("");  // also refreshes the board and the map's trains
+    if (view.pickers === "hide") { pickersOpen = true; applyView(); }  // so a station can be picked
     mapView.fitLines();
   }
   function updateClear() {
-    $("clear-btn").hidden = !(state.dest || state.selectedTrip || state.line);
+    $("clear-btn").hidden = !(state.station || state.dest || state.selectedTrip || state.line);
     const chip = $("map-clear");
     const dest = state.dest && state.stationById.get(state.dest);
     if (state.tab === "map" && dest) { if (chip.hidden) enter(chip); } else chip.hidden = true;
@@ -575,6 +580,7 @@
   function goToLeg() {
     const leg = state.home.leg;
     if (!leg) return;
+    if (pickersOpen && view.pickers === "hide") { pickersOpen = false; applyView(); }  // opened by Clear
     selectDest(leg.to || "", { refresh: false });
     selectStation(leg.from);
   }
@@ -666,9 +672,13 @@
 
   async function refreshDepartures() {
     if (!state.station) {
+      state.departures = null;  // so the 15 s re-render doesn't bring the old board back
+      lastBoardKey = null;
       $("board-title").textContent = "Choose a station";
       $("board-list").innerHTML = "";
-      showEmpty("Search for a station above, or tap one on the map.");
+      $("board-notice").hidden = true;
+      showEmpty("Search for a station above, tap one on the map, or use To home / To work.");
+      updateHomeUi();
       return;
     }
     try {
