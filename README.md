@@ -14,7 +14,7 @@ A self-hosted web app that shows live Metra trains. It runs in Docker on a home 
 
 - **When is my next train, and is it on time?** Pick a station (and optionally where you're going). The board shows the next trains with how long until each leaves, and whether it's on time, late or cancelled. A late train shows the original time crossed out, the new time beside it, and the reason if Metra has posted one.
 - **What's left today?** The **Today's timetable** tab lists every train still to come from your station, grouped by hour, with live times where Metra has them.
-- **Where are the trains?** A map shows every line in its official color and the trains moving along it. Tap a train on the board to see it on the map, or tap one on the map to find it on the board.
+- **Where are the trains?** A map shows every line in its official color and the trains moving along it. Tap a train on the board to see it on the map, or tap one on the map to find it on the board. The **Map** tab shows just the map, full screen on a phone, and **Clear** goes back to showing every train.
 - **Is anything wrong on my line?** Service alerts sit behind a 🔔 bell with a badge for new ones. Alerts that mean trains won't match the timetable (extra service, line closures, trains running express) are tagged **Schedule change** and shown above the board.
 - **Home and work.** Set a home and work station once. On workdays the app opens on the trip to work in the morning and the trip home after your switch time. It's saved on the server, so every device opens the same way.
 - **Can my phone just tell me?** Home Assistant can ask the app for your commute and send a weekday-morning notification like *"7:12 AM (on time), 7:30 AM (8 min late: Weather)"*.

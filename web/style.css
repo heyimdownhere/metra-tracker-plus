@@ -550,3 +550,18 @@ body.settings-open .layout, body.settings-open #alerts, body.settings-open #bell
   text-transform: uppercase; color: var(--muted); background: none !important;
 }
 .station-list li small { font-size: 12px; margin-left: 4px; }
+
+/* ---- Map tab: only the map (tabs stay on top) ---- */
+body.map-only { display: flex; flex-direction: column; height: 100dvh; }
+body.map-only .layout { display: flex; flex-direction: column; flex: 1; min-height: 0; }
+body.map-only .panel { flex: none; border: 0; overflow: visible; }
+body.map-only .panel > :not(.tabs) { display: none; }
+body.map-only .tabs { margin-bottom: 10px; }
+body.map-only .map-wrap { flex: 1; height: auto; min-height: 0; }
+@media (min-width: 821px) { body.map-only .tabs { width: 400px; } }
+.map-clear {
+  position: absolute; top: 12px; left: 50%; transform: translateX(-50%); z-index: 500; max-width: calc(100% - 140px);
+  padding: 7px 14px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--text);
+  font: inherit; font-size: 13px; box-shadow: var(--shadow); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.map-clear span { color: var(--accent); font-weight: 600; }

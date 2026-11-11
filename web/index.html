@@ -61,8 +61,9 @@
   <main class="layout">
     <aside class="panel">
       <nav class="tabs" role="tablist" aria-label="View">
-        <button type="button" role="tab" id="tab-live" data-tab="live" aria-selected="true">Next trains &amp; map</button>
-        <button type="button" role="tab" id="tab-timetable" data-tab="timetable" aria-selected="false">Today's timetable</button>
+        <button type="button" role="tab" id="tab-live" data-tab="live" aria-selected="true">Next trains</button>
+        <button type="button" role="tab" id="tab-timetable" data-tab="timetable" aria-selected="false">Timetable</button>
+        <button type="button" role="tab" id="tab-map" data-tab="map" aria-selected="false">Map</button>
       </nav>
       <div class="picker" id="picker">
         <div class="picker-field">
@@ -116,6 +117,7 @@
             <span id="go-home-text">Home</span>
           </button>
           <button id="change-btn" class="home-btn" type="button" aria-controls="picker" aria-expanded="false" hidden>Change</button>
+          <button id="clear-btn" class="home-btn" type="button" title="Clear the destination and selected train; show all trains" hidden>✕ Clear</button>
           <span id="board-updated" class="muted small"></span>
           </div>
         </div>
@@ -137,6 +139,7 @@
       </button>
       <div id="map-settings" class="map-settings" hidden></div>
       <div id="map-note" class="map-note" hidden></div>
+      <button id="map-clear" class="map-clear" type="button" hidden></button>
     </section>
   </main>
 

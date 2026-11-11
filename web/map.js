@@ -656,6 +656,8 @@
       resize() { map.resize(); },
       selectTrip,
       clearSelection,
+      fitLines,
+      closePopups() { for (const m of trainMarkers.values()) if (m.getPopup().isOpen()) m.togglePopup(); },
       refreshPopups,
       get selectedTrip() { return selected && selected.tripId; },
       setPlaces,

@@ -121,6 +121,7 @@
       if (on) hit = li;
     });
     if (hit && scroll) hit.scrollIntoView({ behavior: "smooth", block: "center" });
+    updateClear();
     return hit;
   }
   const narrow = () => matchMedia("(max-width: 820px)").matches;
@@ -306,6 +307,25 @@
   });
 
   $("board-swap").addEventListener("click", () => $("swap-btn").click());
+
+  // "Clear": drop the Going-to station and any selected train, and show every train.
+  function clearView() {
+    state.selectedTrip = null;
+    mapView.clearSelection(false);
+    mapView.closePopups();
+    markBoardSelection(false);
+    selectDest("");
+    mapView.fitLines();
+  }
+  function updateClear() {
+    $("clear-btn").hidden = !(state.dest || state.selectedTrip);
+    const chip = $("map-clear");
+    const dest = state.dest && state.stationById.get(state.dest);
+    chip.hidden = !(state.tab === "map" && dest);
+    if (dest) chip.innerHTML = `Trains to <b>${esc(dest.name)}</b> <span>· Show all ✕</span>`;
+  }
+  $("clear-btn").addEventListener("click", clearView);
+  $("map-clear").addEventListener("click", clearView);
   // Tap a station name in the board title: centre the map on it.
   $("board-title").addEventListener("click", (e) => {
     const b = e.target.closest(".title-stn");
@@ -395,6 +415,7 @@
     homeBtn.hidden = !state.station || isWork();
     workBtn.hidden = !state.station || atHome;
     $("board-swap").hidden = !(state.station && state.dest);
+    updateClear();
     homeBtn.classList.toggle("is-home", atHome);
     $("home-btn-text").textContent = atHome ? "Home" : "Set as home";
     homeBtn.title = atHome ? "Your home station" : "Make this your home station (opens here on every device)";
@@ -704,7 +725,7 @@
   let pickersOpen = false;  // "Change" shows hidden pickers for a moment
 
   // ---------- tabs: next trains + map / today's timetable ----------
-  state.tab = localStorage.getItem(TAB_KEY) === "timetable" ? "timetable" : "live";
+  state.tab = ["timetable", "map"].includes(localStorage.getItem(TAB_KEY)) ? localStorage.getItem(TAB_KEY) : "live";
   const mapHidden = () => state.tab === "timetable";
   const COUNT_PRESETS = ["3", "5", "8", "10"];
   const clampCount = (v) => Math.min(50, Math.max(1, parseInt(v, 10) || 5));
@@ -727,11 +748,13 @@
   $("count-input").addEventListener("change", () => { $("count-input").value = boardCount(); });
   document.querySelectorAll(".tabs [data-tab]").forEach((b) => b.addEventListener("click", () => {
     if (state.tab === b.dataset.tab) return;
+    const boardKind = (t) => (t === "timetable" ? "timetable" : "board");
+    const reload = boardKind(state.tab) !== boardKind(b.dataset.tab);
     state.tab = b.dataset.tab;
     localStorage.setItem(TAB_KEY, state.tab);
-    state.departures = null;
+    if (reload) state.departures = null;
     applyView();
-    refreshDepartures();
+    if (reload) refreshDepartures();
   }));
 
   function applyView() {
@@ -740,10 +763,14 @@
     $("tt").hidden = !mapHidden();
     const wasHidden = document.body.classList.contains("no-map");
     document.body.classList.toggle("no-map", mapHidden());
-    if (wasHidden && !mapHidden()) {
-      // The map was hidden at size 0: fit it to its box again and catch up on trains.
-      requestAnimationFrame(() => { mapView.resize(); if (state.stations.length) refreshTrains(); });
-    }
+    document.body.classList.toggle("map-only", state.tab === "map");
+    // The map's box changes size between tabs: fit it again (and catch up on trains if it was hidden).
+    requestAnimationFrame(() => {
+      if (mapHidden()) return;
+      mapView.resize();
+      if (wasHidden && state.stations.length) refreshTrains();
+    });
+    updateClear();
     const show = view.pickers !== "hide" || pickersOpen;
     $("picker").hidden = !show;
     const btn = $("change-btn");
