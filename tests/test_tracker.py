@@ -833,3 +833,14 @@ def test_live_train_snaps_onto_its_track(tracker):
     tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.91, -88.05, at)))
     t = next(x for x in tracker._live_trains(at) if x["trip_id"] == "t-0800")
     assert abs(t["lat"] - 41.91) < 1e-4
+
+
+def test_rows_carry_final_station_id(tracker):
+    rows = tracker.departures("A", now=NOW)["departures"]
+    assert rows and all(r["final_station"] == "C" for r in rows)
+
+
+def test_departures_filtered_by_line(tracker):
+    rows = tracker.departures("A", limit=10, now=NOW, route="L2")["departures"]
+    assert {r["trip_id"] for r in rows} == {"u-0815"}  # today's and tomorrow's run
+    assert {r["route_id"] for r in tracker.departures("A", limit=10, now=NOW, route="L1", direction="inbound")["departures"]} == {"L1"}

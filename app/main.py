@@ -172,6 +172,7 @@ def departures(
     limit: int = Query(5, ge=1, le=50),
     to: str | None = Query(None, description="Only trains that later stop at this station"),
     direction: str | None = Query(None, description="inbound/to or outbound/from downtown"),
+    route: str | None = Query(None, description="Only trains on this line (route id, e.g. UP-N)"),
 ):
     if tracker.static is None:
         raise HTTPException(503, "Schedule not loaded yet")
@@ -180,7 +181,7 @@ def departures(
     except ValueError:
         raise HTTPException(400, "direction must be inbound/to or outbound/from (or omitted for both)")
     try:
-        return _json(tracker.departures(station, limit, to=to or None, direction=d))
+        return _json(tracker.departures(station, limit, to=to or None, direction=d, route=route or None))
     except KeyError as exc:
         raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
 

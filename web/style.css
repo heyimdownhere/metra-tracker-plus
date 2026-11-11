@@ -565,3 +565,37 @@ body.map-only .map-wrap { flex: 1; height: auto; min-height: 0; }
   font: inherit; font-size: 13px; box-shadow: var(--shadow); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .map-clear span { color: var(--accent); font-weight: 600; }
+
+/* ---- line cards (no destination picked) ---- */
+.lc { list-style: none; border: 1px solid var(--border); border-left: 5px solid var(--line, var(--accent)); border-radius: 12px;
+      padding: 10px 12px 11px; background: var(--panel-2); display: flex; flex-direction: column; gap: 6px; }
+.lc-top { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.lc-name { font-weight: 700; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-dir { margin-left: auto; color: var(--muted); font-size: 12px; white-space: nowrap; }
+.lc-next { display: grid; grid-template-columns: auto 1fr auto; gap: 10px; align-items: center; width: 100%;
+           text-align: left; font: inherit; color: inherit; background: none; border: 0; padding: 4px 0; cursor: pointer; border-radius: 8px; }
+.lc-time { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; line-height: 1.05; white-space: nowrap; }
+.lc-time .ampm { font-size: 12px; font-weight: 600; margin-left: 2px; color: var(--muted); }
+.lc-time .was { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+.lc-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.lc-dest { font-weight: 700; font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lc-status { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12.5px; }
+.lc-main .reason { font-size: 12px; }
+.lc-in { text-align: right; white-space: nowrap; }
+.lc-in b { font-size: 20px; font-weight: 800; }
+.lc-in small { font-size: 11px; color: var(--muted); margin-left: 3px; font-weight: 600; }
+.lc.cancelled .lc-time { text-decoration: line-through; color: var(--muted); }
+.lc-later { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
+.lc-pill { font: inherit; font-size: 12px; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--border);
+           background: var(--panel); color: var(--text); cursor: pointer; white-space: nowrap; }
+.lc-pill b { font-variant-numeric: tabular-nums; }
+.lc-pill.minor b { color: var(--minor); }
+.lc-pill.late b { color: var(--late); }
+.lc-pill.cancelled { text-decoration: line-through; color: var(--muted); }
+
+.title-line { font-size: 15px; font-weight: 600; color: var(--muted); white-space: nowrap; }
+.title-line .chip { vertical-align: 3px; }
+@media (hover: hover) {
+  .lc-next:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .lc-pill:hover { border-color: var(--accent); }
+}

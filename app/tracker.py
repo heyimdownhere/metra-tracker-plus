@@ -781,6 +781,14 @@ class Tracker:
         """Stop ids belonging to a station id. Raises KeyError."""
         return self._station_stops(station_id)
 
+    def _station_of(self, stop_id: str | None) -> str | None:
+        """The station (parent) id a stop belongs to, as used by /api/stations."""
+        s = self.static
+        if not s or not stop_id:
+            return None
+        parent = (s.stops.get(stop_id) or {}).get("parent")
+        return parent if parent in s.station_children else stop_id
+
     def _station_stops(self, station_id: str) -> list[str]:
         s = self.static
         stop_ids = s.station_children.get(station_id)
@@ -863,13 +871,14 @@ class Tracker:
 
     def departures(
         self, station_id: str, limit: int = 5, now: float | None = None, to: str | None = None,
-        direction: str | None = None, until: float | None = None,
+        direction: str | None = None, until: float | None = None, route: str | None = None,
     ) -> dict:
         """Next departures from a station.
 
         `to`: only trains that later stop there (rows gain arrival times).
         `direction`: "inbound" (toward downtown) or "outbound".
         `until`: only trains scheduled to leave before this time.
+        `route`: only trains on this line (route id).
         """
         s = self.static
         if not s:
@@ -887,6 +896,8 @@ class Tracker:
         candidates = []
         for trip_id, stop_id, seq, base, sched, effective, pred in self._iter_departures(stop_ids, now):
             if until is not None and sched >= until:
+                continue
+            if route and s.trips[trip_id][T_ROUTE] != route:
                 continue
             if direction:
                 last = s.trip_stops[trip_id][-1][S_STOP]
@@ -912,6 +923,7 @@ class Tracker:
             rows.extend(
                 r for r in self._added_departures(set(stop_ids), now)
                 if (not direction or r["direction"] == direction) and (until is None or r["time"] < until)
+                and (not route or r["route_id"] == route)
             )
         rows.sort(key=lambda r: r["time"])
         station = s.stops.get(station_id)
@@ -920,6 +932,7 @@ class Tracker:
             "station": {"id": station_id, "name": self.station_label(station_id) if station else station_id},
             "to": {"id": to, "name": self.station_label(to) if dest_stop else to} if to else None,
             "direction": direction,
+            "route": route,
             "departures": rows[:limit],
             "generated_at": now,
             "realtime": self.realtime_live,
@@ -1071,6 +1084,7 @@ class Tracker:
         return {
             "direction": self._direction(stop_id, last_stop),
             "final_stop": final_stop,
+            "final_station": self._station_of(last_stop),
             "final_arrival": final_arrival,
             "final_arrival_scheduled": final_sched,
             "trip_id": trip_id,
@@ -1144,6 +1158,7 @@ class Tracker:
                     "schedule_change": self.schedule_note(tu.trip.trip_id, now),
                     "direction": self._direction(stu.stop_id, last),
                     "final_stop": s.stop_name(last),
+                    "final_station": self._station_of(last),
                     "final_arrival": float(tu.stop_updates[-1].arrival_time or tu.stop_updates[-1].departure_time or 0) or None,
                     "final_arrival_scheduled": None,
                 })

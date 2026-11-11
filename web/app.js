@@ -311,6 +311,7 @@
   // "Clear": drop the Going-to station and any selected train, and show every train.
   function clearView() {
     state.selectedTrip = null;
+    state.line = null;
     mapView.clearSelection(false);
     mapView.closePopups();
     markBoardSelection(false);
@@ -318,7 +319,7 @@
     mapView.fitLines();
   }
   function updateClear() {
-    $("clear-btn").hidden = !(state.dest || state.selectedTrip);
+    $("clear-btn").hidden = !(state.dest || state.selectedTrip || state.line);
     const chip = $("map-clear");
     const dest = state.dest && state.stationById.get(state.dest);
     chip.hidden = !(state.tab === "map" && dest);
@@ -353,6 +354,7 @@
     const st = state.stationById.get(id);
     if (!st) return;
     state.station = id;
+    state.line = null;
     localStorage.setItem(STATION_KEY, id);
     loadDests(id);
     if (state.dest === id) selectDest("", { refresh: false });
@@ -367,6 +369,7 @@
 
   function selectDest(id, opts = {}) {
     state.dest = id && state.stationById.has(id) ? id : null;
+    if (state.dest) state.line = null;
     if (state.dest) localStorage.setItem(DEST_KEY, state.dest); else localStorage.removeItem(DEST_KEY);
     toPicker.sync();
     updateHomeUi();
@@ -552,6 +555,14 @@
   document.addEventListener("click", (e) => { if (e.target.id === "setup-commute") openCommute(); });
 
   // ---------- departure board ----------
+  // Which list the board shows: to a destination, one line in one direction, or line cards.
+  state.line = null;  // {route, direction} after tapping a train on a line card
+  function lineQuery() {
+    if (state.dest) return `&limit=${boardCount()}`;
+    if (state.line) return `&route=${encodeURIComponent(state.line.route)}${state.line.direction ? `&direction=${state.line.direction}` : ""}&limit=${Math.max(boardCount(), 15)}`;
+    return "&limit=40";
+  }
+
   async function refreshDepartures() {
     if (!state.station) {
       $("board-title").textContent = "Choose a station";
@@ -564,7 +575,7 @@
       const tab = state.tab;
       const d = tab === "timetable"
         ? await api(`/api/timetable?station=${encodeURIComponent(state.station)}${to}`)
-        : await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}&limit=${boardCount()}`);
+        : await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}${lineQuery()}`);
       if (tab !== state.tab) return;  // switched tabs while loading
       d.tab = tab;
       state.departures = d;
@@ -667,8 +678,14 @@
     // Station names are buttons that show that station on the map (not on the timetable tab, which has no map).
     const stn = (id, name) => (mapHidden() || !id ? esc(name)
       : `<button type="button" class="title-stn" data-stn="${esc(id)}" title="Show ${esc(name)} on the map">${esc(name)}</button>`);
-    $("board-title").innerHTML = (d.to ? `${stn(d.station && d.station.id, from)} → ${stn(d.to.id, d.to.name)}` : stn(d.station && d.station.id, from))
-      + (tag ? `<span class="home-tag">${tag}</span>` : "");
+    const lineTitle = () => {
+      const r = d.departures[0];
+      const dir = { inbound: "toward downtown", outbound: "away from downtown" }[d.direction] || "";
+      return ` <span class="title-line">${r ? chip(r.route_short, r.color, r.text_color) : esc(d.route)} ${esc(dir)}</span>`;
+    };
+    $("board-title").innerHTML = (d.to ? `${stn(d.station && d.station.id, from)} → ${stn(d.to.id, d.to.name)}`
+      : stn(d.station && d.station.id, from) + (d.route ? lineTitle() : ""))
+      + (tag && !d.route ? `<span class="home-tag">${tag}</span>` : "");
     $("board-updated").textContent = `Updated ${fmtTime(d.generated_at)}`;
     if (d.tab === "timetable") { renderTimetable(d, now, from); return; }
     if (!d.departures.length) {
@@ -679,6 +696,7 @@
       return;
     }
     showEmpty("");
+    if (!d.to && !d.route) { renderLineCards(d, now); return; }
     $("board-list").innerHTML = setupCardHtml() + d.departures.map((r) => {
       const mins = Math.max(0, Math.round((r.time - now) / 60));
       // Under an hour: "45 min". From an hour: "2 hr" with the minutes underneath.
@@ -713,6 +731,66 @@
     }).join("");
     mapView.refreshPopups();  // "Leaves … at" in an open train popup follows the board
   }
+
+  // No destination picked: one card per line and direction, with the next train
+  // big and the following ones as small times. Tapping a train opens the board
+  // to that train's final station (with arrival times), the train highlighted.
+  function untilHtml(r, now) {
+    const mins = Math.max(0, Math.round((r.time - now) / 60));
+    if (r.cancelled) return "<b>—</b>";
+    if (mins === 0) return "<b>Now</b>";
+    return mins < 60 ? `<b>${mins}</b><small>min</small>` : `<b>${Math.floor(mins / 60)}</b><small>hr${mins % 60 ? ` ${mins % 60}m` : ""}</small>`;
+  }
+  function renderLineCards(d, now) {
+    const groups = new Map();
+    for (const r of d.departures) {
+      const key = `${r.route_id}|${r.direction || ""}`;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    const dirLabel = { inbound: "Toward downtown", outbound: "Away from downtown" };
+    const pickAttrs = (r) => (r.route_id
+      ? ` data-pick="${esc(r.trip_id || "")}" data-route="${esc(r.route_id || "")}" data-dir="${esc(r.direction || "")}" title="All ${esc(r.route_short)} trains this way"` : "");
+    const html = [...groups.values()].map((rs) => {
+      const r = rs[0];
+      const changed = r.scheduled && Math.abs(r.time - r.scheduled) >= 60;
+      const badge = r.cancelled ? '<span class="badge cancel">Cancelled</span>'
+        : r.live ? '<span class="badge live">Live</span>'
+        : r.tracking ? '<span class="badge tracking">Tracking</span>'
+        : '<span class="badge sched">Scheduled</span>';
+      const status = [badge, r.train ? `<span class="muted">#${esc(r.train)}</span>` : "",
+        (r.live || r.tracking) && !r.cancelled ? delayHtml(r.delay, r.tracking) : ""].filter(Boolean).join(" ");
+      const later = rs.slice(1, 4).map((x) => {
+        const late = (x.live || x.tracking) && x.delay >= 60 ? (x.delay >= 360 ? " late" : " minor") : "";
+        return `<button type="button" class="lc-pill${x.cancelled ? " cancelled" : ""}${late}"${pickAttrs(x)}><b>${esc(fmtTime(x.time))}</b> · ${esc(x.destination || "")}</button>`;
+      }).join("");
+      return `<li class="lc${r.cancelled ? " cancelled" : ""}" style="--line:${esc(r.color)}">
+        <div class="lc-top">${chip(r.route_short, r.color, r.text_color)}<span class="lc-name">${esc(r.route_name)}</span><span class="lc-dir">${dirLabel[r.direction] || ""}</span></div>
+        <button type="button" class="lc-next"${pickAttrs(r)}>
+          <span class="lc-time">${bigTime(r.time)}${changed ? `<s class="was">${fmtTime(r.scheduled)}</s>` : ""}</span>
+          <span class="lc-main"><span class="lc-dest">${esc(r.destination || r.route_name)}</span><span class="lc-status">${status}</span>
+            ${r.delay_reason ? `<span class="reason">${esc(r.delay_reason)}</span>` : r.schedule_change ? `<span class="reason schedchg">${esc(r.schedule_change)}</span>` : ""}</span>
+          <span class="lc-in">${untilHtml(r, now)}</span>
+        </button>
+        ${later ? `<div class="lc-later"><span class="muted">Then</span>${later}</div>` : ""}
+      </li>`;
+    });
+    $("board-list").innerHTML = setupCardHtml() + html.join("");
+    mapView.refreshPopups();
+  }
+  $("board-list").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-pick]");
+    if (!b || !b.dataset.route) return;
+    e.stopPropagation();
+    // Show every train on this line in this direction, with the tapped train highlighted (and on the map).
+    state.selectedTrip = b.dataset.pick || null;
+    state.line = { route: b.dataset.route, direction: b.dataset.dir || null };
+    state.departures = null;
+    updateClear();
+    refreshDepartures();
+    if (state.selectedTrip && !mapHidden()) mapView.selectTrip(state.selectedTrip, b.dataset.route);
+    window.scrollTo({ top: $("board-title").getBoundingClientRect().top + window.scrollY - 12, behavior: "smooth" });
+  }, true);
 
   // ---------- display options (this device only) ----------
   const view = { pickers: "show", alerts: "bell", alertLines: "all", mapTrains: "dest", count: "5" };
