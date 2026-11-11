@@ -22,6 +22,59 @@
   };
 
   const $ = (id) => document.getElementById(id);
+
+  // ---------- motion: one set of helpers so everything moves the same way ----------
+  const reduceMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Show an element with its enter animation (see .anim-enter in style.css).
+  function enter(el) {
+    if (!el) return;
+    const wasHidden = el.hidden;
+    const wasLeaving = el.classList.contains("anim-leave");
+    el._animToken = (el._animToken || 0) + 1;  // cancels a leave() still in progress
+    el.hidden = false;
+    el.classList.remove("anim-leave");
+    if (!wasHidden && !wasLeaving) return;
+    if (reduceMotion()) return;
+    el.classList.remove("anim-enter");
+    void el.offsetWidth;  // restart the animation
+    el.classList.add("anim-enter");
+    el.addEventListener("animationend", () => el.classList.remove("anim-enter"), { once: true });
+  }
+  // Hide an element after its leave animation; `done` runs once it's hidden.
+  function leave(el, done) {
+    if (!el) return;
+    if (el.hidden || reduceMotion()) { el.hidden = true; if (done) done(); return; }
+    let finished = false;
+    const token = el._animToken = (el._animToken || 0) + 1;
+    const fin = () => {
+      if (finished || el._animToken !== token) return;  // re-opened meanwhile
+      finished = true;
+      el.classList.remove("anim-leave");
+      el.hidden = true;
+      if (done) done();
+    };
+    el.classList.remove("anim-enter");
+    el.classList.add("anim-leave");
+    el.addEventListener("animationend", fin, { once: true });
+    setTimeout(fin, 320);  // in case the animation never runs
+  }
+  // Fade/slide a list's items in one after another (only when the view changes).
+  function staggerIn(container) {
+    if (!container || reduceMotion()) return;
+    [...container.children].forEach((c, i) => c.style.setProperty("--i", String(Math.min(i, 10))));
+    container.classList.remove("list-enter");
+    void container.offsetWidth;
+    container.classList.add("list-enter");
+    clearTimeout(container._animT);
+    container._animT = setTimeout(() => container.classList.remove("list-enter"), 700);
+  }
+  function fadeIn(el) {
+    if (!el || reduceMotion()) return;
+    el.classList.remove("fade-in");
+    void el.offsetWidth;
+    el.classList.add("fade-in");
+    el.addEventListener("animationend", () => el.classList.remove("fade-in"), { once: true });
+  }
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
   async function api(path) {
@@ -70,7 +123,13 @@
   // ---------- theme ----------
   $("theme-toggle").addEventListener("click", () => {
     const next = document.documentElement.dataset.theme === "light" ? "dark" : "light";
-    document.documentElement.dataset.theme = next;
+    const root = document.documentElement;
+    if (!reduceMotion()) {
+      root.classList.add("theme-anim");
+      clearTimeout(root._themeT);
+      root._themeT = setTimeout(() => root.classList.remove("theme-anim"), 450);
+    }
+    root.dataset.theme = next;
     localStorage.setItem(THEME_KEY, next);
     document.querySelector('meta[name="theme-color"]').content = next === "light" ? "#ffffff" : "#0f1216";
     mapView.onThemeChange();
@@ -241,7 +300,7 @@
     const current = () => { const st = state.stationById.get(getValue()); return st ? st.name : ""; };
 
     function open(isOpen) {
-      list.hidden = !isOpen;
+      if (isOpen) enter(list); else list.hidden = true;
       input.setAttribute("aria-expanded", String(isOpen));
     }
     function render() {
@@ -322,7 +381,7 @@
     $("clear-btn").hidden = !(state.dest || state.selectedTrip || state.line);
     const chip = $("map-clear");
     const dest = state.dest && state.stationById.get(state.dest);
-    chip.hidden = !(state.tab === "map" && dest);
+    if (state.tab === "map" && dest) { if (chip.hidden) enter(chip); } else chip.hidden = true;
     if (dest) chip.innerHTML = `Trains to <b>${esc(dest.name)}</b> <span>· Show all ✕</span>`;
   }
   $("clear-btn").addEventListener("click", clearView);
@@ -668,7 +727,24 @@
     el.innerHTML = html.join("");
   }
 
+  // The board re-renders every 15-30 s; only animate when the view itself changes
+  // (another station, direction, line or tab), so a refresh never flickers.
+  let lastBoardKey = null;
   function renderBoard() {
+    renderBoardInner();
+    const d = state.departures;
+    if (!d) return;
+    const key = [d.tab, d.station && d.station.id, d.to && d.to.id, d.route, d.direction].join("|");
+    if (key !== lastBoardKey) {
+      if (lastBoardKey !== null) {
+        staggerIn(d.tab === "timetable" ? $("tt").querySelector(".tt-list") : $("board-list"));
+        fadeIn($("board-title"));
+      }
+      lastBoardKey = key;
+    }
+  }
+
+  function renderBoardInner() {
     const d = state.departures;
     renderBoardNotice();
     if (!d) return;
@@ -836,12 +912,18 @@
   }));
 
   function applyView() {
-    document.querySelectorAll(".tabs [data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab)));
+    const tabs = [...document.querySelectorAll(".tabs [data-tab]")];
+    tabs.forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab)));
+    const tabBar = document.querySelector(".tabs");
+    tabBar.style.setProperty("--tab-i", String(Math.max(0, tabs.findIndex((b) => b.dataset.tab === state.tab))));
+    tabBar.style.setProperty("--tab-n", String(tabs.length));
+    const wasMapOnly = document.body.classList.contains("map-only");
     $("board-list").hidden = mapHidden();
     $("tt").hidden = !mapHidden();
     const wasHidden = document.body.classList.contains("no-map");
     document.body.classList.toggle("no-map", mapHidden());
     document.body.classList.toggle("map-only", state.tab === "map");
+    if (wasMapOnly !== (state.tab === "map") || (wasHidden && !mapHidden())) fadeIn(document.querySelector(".map-wrap"));
     // The map's box changes size between tabs: fit it again (and catch up on trains if it was hidden).
     requestAnimationFrame(() => {
       if (mapHidden()) return;
@@ -850,7 +932,7 @@
     });
     updateClear();
     const show = view.pickers !== "hide" || pickersOpen;
-    $("picker").hidden = !show;
+    if (show && $("picker").hidden) enter($("picker")); else if (!show) $("picker").hidden = true;
     const btn = $("change-btn");
     btn.hidden = view.pickers !== "hide";
     btn.textContent = pickersOpen ? "Done" : "Change";
@@ -875,13 +957,19 @@
   }
   function showSettings(on) {
     const page = $("settings-page");
-    if (on === !page.hidden) return;
-    page.hidden = !on;
-    document.body.classList.toggle("settings-open", on);
-    if (on) { fillSettings(); window.scrollTo(0, 0); }
-    else {
-      // The map may have been resized while hidden.
-      requestAnimationFrame(() => { if (!mapHidden()) mapView.resize(); });
+    if (on === !page.hidden && !page.classList.contains("anim-leave")) return;
+    if (on) {
+      document.body.classList.add("settings-open");
+      fillSettings();
+      window.scrollTo(0, 0);
+      enter(page);
+    } else {
+      leave(page, () => {
+        document.body.classList.remove("settings-open");
+        fadeIn(document.querySelector(".layout"));
+        // The map may have been resized while hidden.
+        requestAnimationFrame(() => { if (!mapHidden()) mapView.resize(); });
+      });
     }
   }
   window.addEventListener("hashchange", () => showSettings(location.hash === "#settings"));
@@ -972,10 +1060,10 @@
 
   // Bell: alerts stay out of the way until you open them. The badge counts
   // alerts you haven't looked at yet; opening the bell marks them seen.
-  const bellOpen = () => !$("bell-panel").hidden;
+  const bellOpen = () => !$("bell-panel").hidden && !$("bell-panel").classList.contains("anim-leave");
   function setBell(open) {
     const wasOpen = bellOpen();
-    $("bell-panel").hidden = !open;
+    if (open) enter($("bell-panel")); else leave($("bell-panel"));
     $("bell-btn").setAttribute("aria-expanded", String(open));
     // New ones keep their dot while the list is open; they count as seen once you close it.
     if (wasOpen && !open) {
@@ -993,8 +1081,9 @@
 
   $("alerts-toggle").addEventListener("click", () => {
     const listEl = $("alerts-list");
-    listEl.hidden = !listEl.hidden;
-    $("alerts-toggle").setAttribute("aria-expanded", String(!listEl.hidden));
+    const opening = listEl.hidden;
+    if (opening) enter(listEl); else leave(listEl);
+    $("alerts-toggle").setAttribute("aria-expanded", String(opening));
   });
 
   async function refreshAlerts() {
@@ -1075,9 +1164,9 @@
     noticeIds = hits.map((a) => a.id);
     // Hidden once swiped away / ✕'d, until a schedule-change alert we haven't hidden shows up.
     const show = hits.length && !hits.every((a) => noticeHidden.has(a.id));
-    el.hidden = !show;
     el.style.transform = ""; el.style.opacity = "";
-    if (!show) return;
+    if (!show) { el.hidden = true; return; }
+    if (el.hidden) enter(el);
     const lines = [...new Set(hits.flatMap((a) => a.routes.filter((r) => routes.has(r.id)).map((r) => r.short_name)))];
     $("board-notice-main").innerHTML = `<span class="badge schedchg">Schedule change</span>
       <span class="txt"><b>${esc(lines.join(", "))}:</b> ${esc(hits[0].header)}</span>
@@ -1093,7 +1182,9 @@
     const live = new Set((state.alerts || []).map((a) => a.id));
     noticeHidden = new Set([...noticeHidden, ...noticeIds].filter((id) => live.has(id)));
     localStorage.setItem(NOTICE_KEY, JSON.stringify([...noticeHidden]));
-    $("board-notice").hidden = true;
+    const el = $("board-notice");
+    if (el.style.opacity === "0") el.hidden = true;  // already swiped off screen
+    else leave(el);
   }
   $("board-notice-x").addEventListener("click", (e) => { e.stopPropagation(); hideNotice(); });
   // Swipe left or right to hide it.
