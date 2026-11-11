@@ -680,6 +680,60 @@ class Tracker:
         out.sort(key=lambda x: x["name"].lower())
         return out
 
+    def destinations(self, station_id: str) -> list[dict]:
+        """Stations you can reach from `station_id` on a direct train, nearest first (by distance).
+
+        Each: {id, minutes (shortest scheduled ride), direction (inbound/outbound)}.
+        Built from every trip in the schedule that stops here, so branches the
+        station isn't on are left out. Cached per schedule version.
+        """
+        s = self.static
+        if not s:
+            return []
+        cache = getattr(self, "_dest_cache", None)
+        if cache is None or cache[0] != s.version:
+            parent = {c: sid for sid, kids in s.station_children.items() for c in kids}
+            self._dest_cache = cache = (s.version, parent, {})
+        _, parent, memo = cache
+        if station_id in memo:
+            return memo[station_id]
+        try:
+            here = set(self._station_stops(station_id))
+        except KeyError:
+            if station_id in s.stops:
+                return []  # a stop no train leaves from
+            raise
+        best: dict[str, tuple[int, str | None]] = {}
+        seen_trips: set[str] = set()
+        for stop_id in here:
+            for dep, trip_id, seq in s.stop_departures.get(stop_id, []):
+                if trip_id in seen_trips:
+                    continue
+                seen_trips.add(trip_id)
+                sts = s.trip_stops.get(trip_id, [])
+                direction = self._direction(stop_id, sts[-1][S_STOP] if sts else None)
+                for x in sts:
+                    if x[S_SEQ] <= seq:
+                        continue
+                    dest = parent.get(x[S_STOP], x[S_STOP])
+                    if dest == station_id or x[S_STOP] in here:
+                        continue
+                    mins = max(0, round((x[S_ARR] - dep) / 60))
+                    if dest not in best or mins < best[dest][0]:
+                        best[dest] = (mins, direction)
+        # Order by distance from here, which follows the line; ride times jump around
+        # because express trains skip stops.
+        home = s.stops.get(station_id) or s.stops[next(iter(here))]
+
+        def dist(sid: str) -> float:
+            st = s.stops.get(sid)
+            return _dist_m(home["lat"], home["lon"], st["lat"], st["lon"]) if st else float("inf")
+
+        out = [{"id": d, "minutes": m, "direction": direc} for d, (m, direc) in best.items()]
+        out.sort(key=lambda r: (dist(r["id"]), r["id"]))
+        memo[station_id] = out
+        return out
+
     def _loop_dist(self, stop_id: str | None) -> float | None:
         stop = self.static.stops.get(stop_id or "")
         if not stop:

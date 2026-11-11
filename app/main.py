@@ -185,6 +185,17 @@ def departures(
         raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
 
 
+@app.get("/api/destinations")
+def destinations(station: str = Query(..., min_length=1)):
+    """Stations reachable on a direct train from `station`, nearest first (for the Going-to picker)."""
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    try:
+        return JSONResponse(tracker.destinations(station), headers={"Cache-Control": "public, max-age=3600"})
+    except KeyError as exc:
+        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
+
+
 @app.get("/api/timetable")
 def timetable(
     station: str = Query(..., min_length=1),

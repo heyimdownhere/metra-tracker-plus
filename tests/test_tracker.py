@@ -812,3 +812,11 @@ def test_settings_refuse_same_home_and_work(tracker, tmp_path, monkeypatch):
     assert (p["home_station"], p["work_station"]) == ("A", "C")
     # Swapping both in one save is fine.
     assert c.put("/api/settings", json={"home_station": "C", "work_station": "A"}).status_code == 200
+
+
+def test_destinations_are_direct_trains_nearest_first(tracker):
+    d = tracker.destinations("A")
+    assert [(x["id"], x["minutes"]) for x in d] == [("B", 10), ("C", 40)]
+    assert {x["direction"] for x in d} == {"inbound"}  # Central is near the Loop
+    assert tracker.destinations("C") == []  # last stop: nothing further on
+    assert [x["id"] for x in tracker.destinations("B")] == ["C"]

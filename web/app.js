@@ -208,7 +208,37 @@
     return scored.map((x) => x[1]);
   }
 
-  function makePicker({ inputId, listId, getValue, onSelect, allowClear, clearLabel = "Any destination" }) {
+  // Going-to suggestions: only stations with a direct train from "From",
+  // grouped by direction and nearest first. Loaded once per From station.
+  state.dests = {};
+  async function loadDests(id) {
+    if (!id || state.dests[id]) return;
+    try { state.dests[id] = await api(`/api/destinations?station=${encodeURIComponent(id)}`); } catch (e) { console.warn(e); }
+  }
+  function destSuggestions(q) {
+    const list = state.station && state.dests[state.station];
+    if (!list) return stationMatches(q);
+    const reach = new Map(list.map((d) => [d.id, d]));
+    const withHint = (st) => ({ ...st, hint: `${reach.get(st.id).minutes} min` });
+    const from = state.stationById.get(state.station);
+    if (!q.trim()) {
+      const out = [];
+      for (const [dir, label] of [["inbound", "Toward downtown"], ["outbound", "Away from downtown"], [null, "Other direct trains"]]) {
+        const group = list.filter((d) => (d.direction || null) === dir && state.stationById.has(d.id));
+        if (!group.length) continue;
+        out.push({ header: label });
+        group.forEach((d) => out.push(withHint(state.stationById.get(d.id))));
+      }
+      return out.length ? out : [{ header: `No direct trains from ${from ? from.name : "here"}` }];
+    }
+    // Typing: direct-train stations first, then anything else that matches.
+    const all = stationMatches(q).filter((st) => st.id !== state.station);
+    const direct = all.filter((st) => reach.has(st.id)).map(withHint);
+    const other = all.filter((st) => !reach.has(st.id));
+    return direct.concat(other.length ? [{ header: "No direct train" }, ...other] : []);
+  }
+
+  function makePicker({ inputId, listId, getValue, onSelect, allowClear, clearLabel = "Any destination", suggest = stationMatches }) {
     const input = $(inputId);
     const list = $(listId);
     let matches = [];
@@ -220,18 +250,24 @@
       input.setAttribute("aria-expanded", String(isOpen));
     }
     function render() {
-      matches = stationMatches(input.value).slice(0, 80);
+      const items = suggest(input.value).slice(0, 120);
+      matches = items.filter((x) => !x.header);
       active = matches.length ? 0 : -1;
       const clear = allowClear && getValue() ? `<li role="option" data-id="" class="clear-opt">${esc(clearLabel)}</li>` : "";
-      list.innerHTML = clear + (matches.length
-        ? matches.map((s, i) => `<li role="option" id="${listId}-${i}" data-id="${esc(s.id)}" aria-selected="${i === active}"><span>${esc(s.name)}</span><span class="chips">${routeChips(s.routes)}</span></li>`).join("")
+      let i = -1;
+      list.innerHTML = clear + (items.length
+        ? items.map((st) => {
+          if (st.header) return `<li class="group" role="presentation">${esc(st.header)}</li>`;
+          i += 1;
+          return `<li role="option" id="${listId}-${i}" data-id="${esc(st.id)}" aria-selected="${i === active}"><span>${esc(st.name)}${st.hint ? ` <small class="muted">${esc(st.hint)}</small>` : ""}</span><span class="chips">${routeChips(st.routes)}</span></li>`;
+        }).join("")
         : '<li class="empty">No matching stations</li>');
       open(true);
     }
     function setActive(i) {
       if (!matches.length) return;
       active = (i + matches.length) % matches.length;
-      list.querySelectorAll("li[id]").forEach((li, j) => li.setAttribute("aria-selected", String(j === active)));
+      list.querySelectorAll("li[id]").forEach((li) => li.setAttribute("aria-selected", String(li.id === `${listId}-${active}`)));
       const el = $(`${listId}-${active}`);
       if (el) el.scrollIntoView({ block: "nearest" });
       input.setAttribute("aria-activedescendant", `${listId}-${active}`);
@@ -270,7 +306,7 @@
     onSelect: (id) => selectStation(id),
   });
   const toPicker = makePicker({
-    inputId: "dest-input", listId: "dest-list", allowClear: true,
+    inputId: "dest-input", listId: "dest-list", allowClear: true, suggest: destSuggestions,
     getValue: () => state.dest,
     onSelect: (id) => selectDest(id),
   });
@@ -289,6 +325,7 @@
     const from = state.station;
     state.station = state.dest;
     state.dest = from;
+    loadDests(state.station);
     localStorage.setItem(STATION_KEY, state.station);
     localStorage.setItem(DEST_KEY, state.dest);
     fromPicker.sync();
@@ -303,6 +340,7 @@
     if (!st) return;
     state.station = id;
     localStorage.setItem(STATION_KEY, id);
+    loadDests(id);
     if (state.dest === id) selectDest("", { refresh: false });
     fromPicker.sync();
     $("board-title").textContent = st.name;

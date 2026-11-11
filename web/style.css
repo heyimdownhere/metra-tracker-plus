@@ -544,3 +544,10 @@ body.settings-open .layout, body.settings-open #alerts, body.settings-open #bell
 }
 .title-stn:hover { color: var(--accent); }
 .title-stn:focus-visible { outline: 2px solid var(--accent); border-radius: 4px; }
+
+/* group headings in the station lists */
+.station-list li.group {
+  cursor: default; padding: 10px 10px 4px; font-size: 11px; font-weight: 700; letter-spacing: .07em;
+  text-transform: uppercase; color: var(--muted); background: none !important;
+}
+.station-list li small { font-size: 12px; margin-left: 4px; }
