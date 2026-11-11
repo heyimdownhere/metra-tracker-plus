@@ -536,3 +536,11 @@ body.settings-open .layout, body.settings-open #alerts, body.settings-open #bell
 }
 .board-swap svg { width: 16px; height: 16px; fill: var(--text); transform: rotate(90deg); }
 .board-swap:hover { border-color: var(--accent); }
+
+/* station names in the board title: tap to show on the map */
+.title-stn {
+  font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; text-align: left;
+  text-decoration: underline dotted color-mix(in srgb, currentColor 40%, transparent); text-underline-offset: 4px;
+}
+.title-stn:hover { color: var(--accent); }
+.title-stn:focus-visible { outline: 2px solid var(--accent); border-radius: 4px; }

@@ -276,6 +276,14 @@
   });
 
   $("board-swap").addEventListener("click", () => $("swap-btn").click());
+  // Tap a station name in the board title: centre the map on it.
+  $("board-title").addEventListener("click", (e) => {
+    const b = e.target.closest(".title-stn");
+    const st = b && state.stationById.get(b.dataset.stn);
+    if (!st) return;
+    mapView.flyTo(st.lat, st.lon);
+    if (narrow()) $("map").scrollIntoView({ behavior: "smooth", block: "center" });
+  });
   $("swap-btn").addEventListener("click", () => {
     if (!state.station || !state.dest) return;
     const from = state.station;
@@ -603,7 +611,11 @@
     const now = serverNow();
     const from = d.station ? d.station.name : "";
     const tag = viewTag();
-    $("board-title").innerHTML = esc(d.to ? `${from} → ${d.to.name}` : from) + (tag ? `<span class="home-tag">${tag}</span>` : "");
+    // Station names are buttons that show that station on the map (not on the timetable tab, which has no map).
+    const stn = (id, name) => (mapHidden() || !id ? esc(name)
+      : `<button type="button" class="title-stn" data-stn="${esc(id)}" title="Show ${esc(name)} on the map">${esc(name)}</button>`);
+    $("board-title").innerHTML = (d.to ? `${stn(d.station && d.station.id, from)} → ${stn(d.to.id, d.to.name)}` : stn(d.station && d.station.id, from))
+      + (tag ? `<span class="home-tag">${tag}</span>` : "");
     $("board-updated").textContent = `Updated ${fmtTime(d.generated_at)}`;
     if (d.tab === "timetable") { renderTimetable(d, now, from); return; }
     if (!d.departures.length) {
