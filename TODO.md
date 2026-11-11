@@ -2,18 +2,10 @@
 
 Updated 2026-11-09. The app runs against Metra's **real** schedule and **live** feeds (tested with the real API key). 40 tests pass. CI is green and publishes a ready-to-run Docker image on every push to `main`. What's left is deployment, real-world checks, and new features.
 
-## 1. Deploy on the server (SERVER-IP): do first
+## 1. Deploy on the server: done
 
-- [ ] Add the template: in the Unraid terminal run `wget -O /boot/config/plugins/dockerMan/templates-user/my-metra-tracker-plus.xml https://raw.githubusercontent.com/heyimdownhere/metra-tracker-plus/main/unraid/metra-tracker-plus.xml` (see README → Install on Unraid).
-- [ ] In Unraid, go to **Docker → Add Container** and choose **metra-tracker-plus** from the template list. The template already points at the published image (`ghcr.io/heyimdownhere/metra-tracker-plus:latest`, verified publicly pullable), so nothing needs building.
-- [ ] Fill in the template fields:
-  - **Metra API key** (masked).
-  - Optional: **Home station**, **Work station**, **Commute switch time**, **Workdays**. These can be left empty and set in the app instead.
-  - Leave **Web UI port** at 8080 unless that port is taken.
-- [ ] Click **Apply**, then check the container log. It starts with a settings summary (API key masked) and warns about any value it couldn't use.
-- [ ] Open `http://SERVER-IP:8080`. Check that the status pill shows **Live**, the WebUI button works, and Docker health shows **healthy**.
-- [ ] If home and work weren't set in Unraid, use the **Set up your commute** card or ⚙ Settings → Edit commute.
-- [ ] Check that `/mnt/user/appdata/metra-tracker/` contains `gtfs/`, `history.db` and `settings.json`, and that a restart is fast.
+Running on the server at port 9090 (reached over Tailscale at `http://SERVER-IP:9090`), with live data, home/work saved on the server.
+
 
 ## 2. Check in real use
 
@@ -30,7 +22,7 @@ Over the first days and weeks:
 
 - [ ] Morning and evening: the app opens on the right trip (home → work before the switch time, work → home after), and flips over by itself if it's open at the switch time.
 - [ ] Compare a delayed train's predictions with Metra's own app.
-- [ ] Watch for the **Tracking** badge (GPS-based delay estimate). It hasn't been seen on a real in-service train yet, because every in-service train had a Metra prediction during testing.
+- [x] **Tracking** badge (GPS-based delay) seen on real trains (e.g. ME #227, ~42 min late, Nov 10).
 - [ ] After about a week, on-time history lines ("90% on time · avg 3 min late") should start appearing. Check that they look sensible.
 - [ ] railsmaps.com: check its license. If reuse is allowed, add it as a basemap in `web/map.js`; otherwise drop it.
 
@@ -58,6 +50,9 @@ Over the first days and weeks:
 - [x] **Remote access with Tailscale.** Working (the server at SERVER-IP). Don't port-forward the app: it has no login.
 
 ## 5. Ideas
+
+- [ ] **Show trains that skip your stop** on the board, crossed out with "Skips <station>", instead of leaving them out.
+- [ ] **Install as an Android app:** give the server an https address with Tailscale (`tailscale serve --bg 9090`, MagicDNS + HTTPS certificates on), then Chrome → Install app. Check the icon and launch colours in light mode.
 
 - [ ] Offline app shell (service worker): opens instantly even with no signal and shows the last board, marked as old.
 
