@@ -47,8 +47,12 @@
     attribution: 'Rail overlay: <a href="https://www.openrailwaymap.org/" target="_blank" rel="noopener">OpenRailwayMap</a> (CC-BY-SA)',
   };
   const LOOP = [-87.6345, 41.8812];
-  // Buildings are only drawn (and their tiles only fetched) from street level in.
+  // Buildings appear from street level in (by the camera's zoom). The layer itself
+  // starts lower: when the map is tilted, the far distance is drawn from
+  // lower-zoom tiles, and a layer that skipped those left a hard edge where
+  // 3D buildings stopped and flat footprints began.
   const BUILDINGS_MIN_ZOOM = 15;
+  const BUILDINGS_TILE_MIN_ZOOM = 13;
 
   function loadSettings() {
     let saved = {};
@@ -261,6 +265,12 @@
       ];
     }
 
+    // Fade in around street level (camera zoom), so zoomed out there are no buildings.
+    function buildingOpacity() {
+      const op = settings.buildingOpacity / 100;
+      return ["interpolate", ["linear"], ["zoom"], BUILDINGS_MIN_ZOOM - 0.5, 0, BUILDINGS_MIN_ZOOM, op];
+    }
+
     function ensureBuildings() {
       if (buildingsAdded) return;
       // Buildings come from the server's map too; without it there are none to show.
@@ -279,14 +289,14 @@
         type: "fill-extrusion",
         source,
         "source-layer": "buildings",
-        minzoom: BUILDINGS_MIN_ZOOM,
+        minzoom: BUILDINGS_TILE_MIN_ZOOM,
         paint: {
           "fill-extrusion-color": buildingColor(),
           // Rise out of the ground over the first zoom level instead of popping in.
-          "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], BUILDINGS_MIN_ZOOM, 0, BUILDINGS_MIN_ZOOM + 1,
+          "fill-extrusion-height": ["interpolate", ["linear"], ["zoom"], BUILDINGS_MIN_ZOOM - 0.5, 0, BUILDINGS_MIN_ZOOM + 0.5,
             ["coalesce", ["get", "height"], ["get", "render_height"], 8]],
           "fill-extrusion-base": ["coalesce", ["get", "min_height"], ["get", "render_min_height"], 0],
-          "fill-extrusion-opacity": settings.buildingOpacity / 100,
+          "fill-extrusion-opacity": buildingOpacity(),
         },
       }, map.getLayer("lines") ? "lines" : undefined);
     }
@@ -295,7 +305,7 @@
       if (settings.buildings) ensureBuildings();
       if (map.getLayer("buildings-3d")) {
         map.setLayoutProperty("buildings-3d", "visibility", settings.buildings ? "visible" : "none");
-        map.setPaintProperty("buildings-3d", "fill-extrusion-opacity", settings.buildingOpacity / 100);
+        map.setPaintProperty("buildings-3d", "fill-extrusion-opacity", buildingOpacity());
       }
       if (animate) {
         if (settings.buildings && map.getPitch() < 20) {
