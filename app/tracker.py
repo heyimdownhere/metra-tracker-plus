@@ -826,10 +826,6 @@ class Tracker:
                         pred = self._gps_pred(trip_id, d, seq, sched, now)
                     if pred and pred["skipped"]:
                         continue
-                    if pred and pred["time"] and pred["time"] < sched:
-                        # Metra trains don't leave a station before the timetable
-                        # says, even when running ahead (predictions are arrivals).
-                        pred = {**pred, "time": sched, "delay": 0}
                     effective = pred["time"] if pred and pred["time"] else sched
                     if effective < now - 30:
                         continue
@@ -934,6 +930,7 @@ class Tracker:
             "direction": direction,
             "route": route,
             "departures": rows[:limit],
+            "data_as_of": self.data_as_of("tripupdates"),
             "generated_at": now,
             "realtime": self.realtime_live,
         }
@@ -1164,6 +1161,13 @@ class Tracker:
                 })
         return rows
 
+    def data_as_of(self, feed: str = "tripupdates") -> dict:
+        """When Metra last updated the data being shown (its feed's own timestamp),
+        plus the schedule's published version. Shown with the data, per Metra's license."""
+        st = self.rt.status.get(feed) if self.settings.realtime_enabled else None
+        ts = st.feed_timestamp if st and st.feed_timestamp else None  # shown even when old: that's the point
+        return {"realtime_updated": ts, "schedule_published": self.static.version if self.static else None}
+
     def trains(self, now: float | None = None, to: str | None = None, frm: str | None = None) -> dict:
         """Trains for the map. With `to`, only trains that will still stop at that station;
         with `frm` too, only those running from `frm` toward `to` (your direction of travel)."""
@@ -1216,6 +1220,7 @@ class Tracker:
         else:
             result = {"source": "schedule", "trains": self._estimated_trains(now)}
         result["generated_at"] = now
+        result["data_as_of"] = self.data_as_of("positions")
         self._trains_cache = (now, result)
         return result
 
@@ -1239,7 +1244,7 @@ class Tracker:
                 return (pred or {}).get("delay"), s.stop_name(sts[-1][S_STOP])
         return None, None
 
-    def _snap_to_shape(self, trip_id: str | None, lat: float, lon: float) -> tuple[float, float]:
+    def _snap_to_shape(self, trip_id: str | None, lat: float, lon: float) -> tuple[float, float, int]:
         """Move a GPS point onto the trip's drawn track (shapes.txt) if it's close.
 
         GPS fixes are often a few dozen metres off, which puts the marker beside
@@ -1248,7 +1253,7 @@ class Tracker:
         s = self.static
         shape = s.shapes.get(s.trips[trip_id][T_SHAPE]) if s and trip_id in s.trips else None
         if not shape or len(shape) < 2:
-            return lat, lon
+            return lat, lon, 0
         coslat = math.cos(math.radians(lat))
         best = None
         for (alat, alon), (blat, blon) in zip(shape, shape[1:]):
@@ -1262,8 +1267,8 @@ class Tracker:
             if best is None or d2 < best[0]:
                 best = (d2, alat + f * (blat - alat), alon + f * (blon - alon))
         if best is None or best[0] > SNAP_MAX_M ** 2:
-            return lat, lon
-        return best[1], best[2]
+            return lat, lon, 0
+        return best[1], best[2], round(math.sqrt(best[0]))
 
     def _live_trains(self, now: float) -> list[dict]:
         s = self.static
@@ -1310,6 +1315,8 @@ class Tracker:
                 "destination": s.trip_destination(trip_id) if (s and trip_id) else None,
                 "lat": snapped[0],
                 "lon": snapped[1],
+                # Metres the GPS point was moved to sit on the drawn track (0 = shown as reported).
+                "snapped_m": snapped[2],
                 "bearing": v.bearing,
                 "delay": delay,
                 "delay_reason": (

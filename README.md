@@ -29,7 +29,7 @@ It's light on your phone's data: the server talks to Metra, and your phone only 
   - **Live**: Metra's own prediction.
   - **Tracking**: Metra reports the train's GPS position but sent no prediction, so the delay is estimated from where the train is compared with the timetable ("~3 min late").
   - **Scheduled**: no live data; timetable time.
-- Delays of 1–5 min are amber and 6+ min red (Metra counts under 6 minutes as on time). Departures are never shown earlier than scheduled. Cancelled trains are struck through. Extra trains not in the timetable are tagged **Extra train**.
+- Delays of 1–5 min are amber and 6+ min red (Metra counts under 6 minutes as on time). Times are shown as Metra predicts them, unchanged (an early prediction shows as early). Cancelled trains are struck through. Extra trains not in the timetable are tagged **Extra train**.
 - With a **Going to** station, each train shows its arrival time there and the trip length. Every train also shows its estimated arrival at the end of the line.
 - **Delay reasons** come from an alert naming that train, or else one for its line. The alert's cause is shown (e.g. "Weather"), or its text if the cause is unknown.
 - **On-time history**: once a train has been seen on 5+ days, it shows its record at your station over the last 30 days, e.g. "90% on time · avg 3 min late". Weekday, Saturday and Sunday trains are counted separately.
@@ -61,6 +61,7 @@ It's light on your phone's data: the server talks to Metra, and your phone only 
 - The schedule (static GTFS) comes from `https://schedules.metrarail.com/gtfs/schedule.zip`. The app checks `published.txt` every hour and reloads when it changes, and re-downloads the whole file once a week in case it changed silently. A download is only used if it reads correctly and has trains in the coming week; the previous schedule is kept as a backup.
 - Live data (GTFS-Realtime: `positions`, `tripupdates`, `alerts`) comes from `https://gtfspublic.metrarr.com/gtfs/public/…` with `Authorization: Bearer $METRA_API_TOKEN`. It is polled every 30 s and never faster.
 - **The browser never contacts Metra.** All Metra requests are made by the server, as Metra's license requires.
+- **Metra's license** also requires that wherever the data is shown, the app says it is not sponsored, affiliated, or operated by Metra and when the data was last updated, and that Metra's data isn't modified. The board, timetable and map each carry a small line with that statement and Metra's feed time. Predictions are shown as Metra sends them; values the app works out itself (GPS "Tracking" delays, markers drawn on the track line) are labelled as such.
 - Trip, service, shape and stop IDs are treated as opaque strings. If realtime trip IDs stop matching the schedule, trips are matched by route + start time + service day instead.
 
 ## Install on Unraid

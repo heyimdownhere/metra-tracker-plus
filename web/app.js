@@ -102,6 +102,22 @@
   }
   const serverNow = () => Date.now() / 1000 + (state.clockOffset || 0);
 
+  // ---------- Metra data statement (license: shown with the data) ----------
+  // "When Metra last updated this data" + "not sponsored, affiliated, or operated by Metra".
+  let dateTimeFmt = null;
+  function fmtDateTime(epoch) {
+    if (!dateTimeFmt) dateTimeFmt = new Intl.DateTimeFormat([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit", timeZone: state.tz });
+    return dateTimeFmt.format(new Date(epoch * 1000));
+  }
+  const DISCLAIMER = "Not sponsored, affiliated, or operated by Metra.";
+  function dataStatement(asOf, what) {
+    const a = asOf || {};
+    const when = a.realtime_updated ? `Metra ${what} data last updated ${fmtDateTime(a.realtime_updated)}.`
+      : a.schedule_published ? `Metra schedule data published ${a.schedule_published}.`
+      : "Data from Metra.";
+    return `${when} Not sponsored, affiliated, or operated by Metra.`;
+  }
+
   // ---------- formatting ----------
   let timeFmt = null;
   function fmtTime(epoch) {
@@ -161,6 +177,7 @@
     rows.push(["Status", status]);
     if (t.delay_reason) rows.push(["Reason", esc(t.delay_reason)]);
     if (t.timestamp) rows.push(["Updated", ago(t.timestamp)]);
+    if (t.snapped_m >= 5) rows.push(["Map spot", `<span class="muted">Drawn on the track line. Metra's GPS put it ${t.snapped_m} m away.</span>`]);
     // Is this train on the board you're looking at?
     const d = state.departures;
     const row = d && t.trip_id && (d.departures || []).find((r) => r.trip_id === t.trip_id);
@@ -236,9 +253,13 @@
     const from = dest && state.station ? `&from=${encodeURIComponent(state.station)}` : "";
     try { data = await api(dest ? `/api/trains?to=${encodeURIComponent(state.dest)}${from}` : "/api/trains"); } catch (e) { console.warn(e); return; }
     mapView.updateTrains(data);
+    $("map-data").textContent = DISCLAIMER;
+    const asOf = data.data_as_of || {};
+    const when = asOf.realtime_updated ? ` · ${fmtDateTime(asOf.realtime_updated)}` : "";
+    $("map-data").hidden = false;
     const n = data.trains.length;
     const note = $("map-note");
-    note.textContent = `${n} train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}`;
+    note.textContent = `${n} train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}${when}`;
     note.hidden = false;
   }
 
@@ -672,6 +693,7 @@
 
   async function refreshDepartures() {
     if (!state.station) {
+      $("data-line").hidden = true;
       state.departures = null;  // so the 15 s re-render doesn't bring the old board back
       lastBoardKey = null;
       $("board-title").textContent = "Choose a station";
@@ -814,7 +836,13 @@
     $("board-title").innerHTML = (d.to ? `${stn(d.station && d.station.id, from)} → ${stn(d.to.id, d.to.name)}`
       : stn(d.station && d.station.id, from) + (d.route ? lineTitle() : ""))
       + (tag && !d.route ? `<span class="home-tag">${tag}</span>` : "");
-    $("board-updated").textContent = `Updated ${fmtTime(d.generated_at)}`;
+    const asOf = d.data_as_of || {};
+    // License: when Metra last updated the data (here) + the disclaimer (small line below).
+    $("board-updated").textContent = asOf.realtime_updated ? `Metra data ${fmtDateTime(asOf.realtime_updated)}`
+      : asOf.schedule_published ? `Metra schedule ${asOf.schedule_published.split(" ")[0]}` : "Metra data";
+    $("board-updated").title = dataStatement(asOf, "train");
+    $("data-line").textContent = DISCLAIMER;
+    $("data-line").hidden = false;
     if (d.tab === "timetable") { renderTimetable(d, now, from); return; }
     if (!d.departures.length) {
       $("board-list").innerHTML = "";
@@ -1286,7 +1314,7 @@
   async function refreshStatus() {
     try { state.status = await api("/api/status"); } catch (e) { return false; }
     const s = state.status;
-    if (s.timezone !== state.tz) { state.tz = s.timezone; timeFmt = null; }
+    if (s.timezone !== state.tz) { state.tz = s.timezone; timeFmt = null; dateTimeFmt = null; }
     state.interval = Math.max(30, s.realtime_interval || 30);
     const pill = $("mode-pill");
     pill.classList.remove("live", "warn");

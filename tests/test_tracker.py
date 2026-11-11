@@ -496,10 +496,19 @@ def test_stale_vehicle_positions_are_dropped(tracker):
     assert [t["trip_id"] for t in tracker._live_trains(at)] == ["t-0800"]
 
 
-def test_never_shows_a_departure_before_schedule(tracker):
+def test_shows_metras_prediction_unchanged_even_when_early(tracker):
+    # Metra's license: don't modify its data. An early prediction is shown as given.
     _apply(tracker, [_tu("t-0800", [("A", -240)])])  # running 4 min early
     rows = {r["trip_id"]: r for r in tracker.departures("A", now=NOW)["departures"]}
-    assert rows["t-0800"]["time"] == rows["t-0800"]["scheduled"] and rows["t-0800"]["delay"] == 0
+    assert rows["t-0800"]["time"] == rows["t-0800"]["scheduled"] - 240 and rows["t-0800"]["delay"] == -240
+
+
+def test_responses_say_when_metra_last_updated_the_data(tracker):
+    _apply(tracker, [_tu("t-0800", [("A", 300)])])
+    tracker.rt.status["tripupdates"].feed_timestamp = int(NOW)  # set by the real poller from the feed header
+    d = tracker.departures("A", now=NOW)["data_as_of"]
+    assert d["realtime_updated"] == int(NOW) and d["schedule_published"] == "v1"
+    assert "data_as_of" in tracker.trains(NOW)
 
 
 def test_feed_with_old_header_timestamp_is_not_live(tracker):
@@ -829,6 +838,7 @@ def test_live_train_snaps_onto_its_track(tracker):
     tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.90036, -88.05, at)))
     t = next(x for x in tracker._live_trains(at) if x["trip_id"] == "t-0800")
     assert abs(t["lat"] - 41.90) < 1e-6 and abs(t["lon"] + 88.05) < 1e-4
+    assert 35 <= t["snapped_m"] <= 45  # labelled in the popup
     # Far from the track (a yard 1 km away): left where GPS says.
     tracker.rt.vehicles = rtp.parse_positions(_feed(_vehicle("1", "t-0800", 41.91, -88.05, at)))
     t = next(x for x in tracker._live_trains(at) if x["trip_id"] == "t-0800")
