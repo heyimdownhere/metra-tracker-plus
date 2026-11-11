@@ -217,6 +217,8 @@ pytest                          # unit tests (synthetic GTFS + GTFS-RT)
 METRA_LIVE_TESTS=1 pytest       # also parse Metra's real static feed
 ```
 
+**Branches and builds:** work happens on `feature/…` branches, which don't run GitHub Actions; run the tests locally before pushing. Merging into `main` runs the tests once and publishes the Docker image the server pulls. Pull requests run the tests only, and docs-only changes don't run anything.
+
 ## Credits
 
 Schedule and realtime data are provided by Metra. This project is not affiliated with Metra. The map uses [MapLibre GL JS](https://maplibre.org/) (BSD-3) and [Protomaps](https://protomaps.com) basemaps (© OpenStreetMap contributors), both vendored. Optional online backgrounds come from [OpenFreeMap](https://openfreemap.org) / OpenMapTiles (© OpenStreetMap contributors) and Esri World Imagery, and the rail overlay from OpenRailwayMap (CC-BY-SA).
