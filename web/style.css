@@ -140,7 +140,7 @@ button { font: inherit; color: inherit; }
 .dep .hist .bad { color: var(--late); font-weight: 700; }
 .dep .final b { color: var(--text); font-weight: 600; }
 .dep s.was { color: var(--muted); text-decoration: line-through; margin-right: 1px; }
-.home-tag { font-size: 11px; font-weight: 700; color: var(--accent); margin-left: 6px; vertical-align: middle; }
+.home-tag { font-size: 11px; font-weight: 700; color: var(--accent); margin-left: 6px; vertical-align: middle; white-space: nowrap; display: inline-block; }
 .picker .optional { text-transform: none; letter-spacing: 0; opacity: .8; }
 .swap-btn {
   width: 26px; height: 26px; border-radius: 50%; flex: none;
@@ -173,7 +173,12 @@ button { font: inherit; color: inherit; }
 
 /* ---- board ---- */
 .board { padding: 8px 16px 12px; flex: 1; }
-.board-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin: 6px 0 8px; }
+.board-head { display: flex; flex-direction: column; gap: 6px; margin: 6px 0 8px; }
+.board-title-row { display: flex; align-items: center; gap: 10px; }
+.board-title-row h2 { flex: 1; min-width: 0; }
+.board-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.board-actions #board-updated { margin-left: auto; }
+.board-actions:not(:has(button:not([hidden]))) #board-updated { margin-left: 0; }
 .board-head h2 { font-size: 20px; margin: 0; }
 .board-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .dep {
@@ -523,3 +528,11 @@ body.settings-open .layout, body.settings-open #alerts, body.settings-open #bell
 }
 .settings-foot { display: flex; justify-content: flex-end; }
 .primary-btn { padding: 10px 22px; border-radius: 10px; border: 1px solid var(--accent); background: var(--accent); color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+
+/* swap button next to the board title */
+.board-swap {
+  flex: none; align-self: center; width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+  border: 1px solid var(--border); background: var(--panel-2); cursor: pointer; padding: 0;
+}
+.board-swap svg { width: 16px; height: 16px; fill: var(--text); transform: rotate(90deg); }
+.board-swap:hover { border-color: var(--accent); }

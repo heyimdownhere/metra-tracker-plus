@@ -275,6 +275,7 @@
     onSelect: (id) => selectDest(id),
   });
 
+  $("board-swap").addEventListener("click", () => $("swap-btn").click());
   $("swap-btn").addEventListener("click", () => {
     if (!state.station || !state.dest) return;
     const from = state.station;
@@ -349,8 +350,11 @@
     if (state.stations.length) syncMapPlaces();
     const p = state.home;
     const homeBtn = $("home-btn"), workBtn = $("work-btn"), go = $("go-home-btn");
-    homeBtn.hidden = workBtn.hidden = !state.station;
     const atHome = !!p.home_station && state.station === p.home_station;
+    // One station can't be both: at your home only "Home" shows, at work only "Work".
+    homeBtn.hidden = !state.station || isWork();
+    workBtn.hidden = !state.station || atHome;
+    $("board-swap").hidden = !(state.station && state.dest);
     homeBtn.classList.toggle("is-home", atHome);
     $("home-btn-text").textContent = atHome ? "Home" : "Set as home";
     homeBtn.title = atHome ? "Your home station" : "Make this your home station (opens here on every device)";

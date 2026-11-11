@@ -104,13 +104,20 @@
 
       <div class="board">
         <div class="board-head">
+          <div class="board-title-row">
           <h2 id="board-title">Choose a station</h2>
+          <button id="board-swap" class="board-swap" type="button" aria-label="Swap direction" title="Swap: go the other way" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3 3 7l4 4V8h11V6H7V3Zm10 10v3H6v2h11v3l4-4-4-4Z"/></svg>
+          </button>
+          </div>
+          <div class="board-actions">
           <button id="go-home-btn" class="home-btn go-home" type="button" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
             <span id="go-home-text">Home</span>
           </button>
           <button id="change-btn" class="home-btn" type="button" aria-controls="picker" aria-expanded="false" hidden>Change</button>
           <span id="board-updated" class="muted small"></span>
+          </div>
         </div>
         <button id="board-notice" class="board-notice" type="button" hidden></button>
         <ol id="board-list" class="board-list"></ol>

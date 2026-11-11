@@ -793,3 +793,22 @@ def test_map_filter_uses_gps_delay(tracker):
     tracker._gps = tracker._gps_estimates(at)
     tracker._trains_cache = None
     assert "t-0800" in {t["trip_id"] for t in tracker.trains(at + 90, to="B", frm="A")["trains"]}
+
+
+def test_settings_refuse_same_home_and_work(tracker, tmp_path, monkeypatch):
+    from fastapi.testclient import TestClient
+    from app import main
+    from app.user_settings import UserSettings
+    monkeypatch.setattr(main, "tracker", tracker)
+    monkeypatch.setattr(main, "user_settings", UserSettings(tmp_path / "settings.json"))
+    c = TestClient(main.app)
+    assert c.put("/api/settings", json={"home_station": "A", "work_station": "C"}).status_code == 200
+    r = c.put("/api/settings", json={"work_station": "A"})
+    assert r.status_code == 400 and "can't both be Alpha" in r.json()["detail"]
+    r = c.put("/api/settings", json={"home_station": "C"})
+    assert r.status_code == 400
+    # Nothing was changed by the refused saves.
+    p = c.get("/api/settings").json()
+    assert (p["home_station"], p["work_station"]) == ("A", "C")
+    # Swapping both in one save is fine.
+    assert c.put("/api/settings", json={"home_station": "C", "work_station": "A"}).status_code == 200

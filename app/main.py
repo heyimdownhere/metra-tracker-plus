@@ -277,7 +277,14 @@ def put_settings(changes: dict = Body(...)):
             raise HTTPException(400, "work_days must be weekdays like [0,1,2,3,4] (Monday = 0) or 'mon-fri'")
         changes["work_days"] = list(parsed_days)
     try:
+        before = user_settings.load()
         user_settings.update(changes)
+        p = profile()
+        if p["home_station"] and p["home_station"] == p["work_station"]:
+            # Home and work (from the app or the environment) can't be the same station.
+            user_settings.update(before)
+            name = tracker.station_label(p["home_station"])
+            raise HTTPException(400, f"Home and work can't both be {name}. Pick a different station for one of them.")
         return _json(effective_home())
     except OSError as exc:
         raise HTTPException(500, f"Could not save settings: {exc}")
