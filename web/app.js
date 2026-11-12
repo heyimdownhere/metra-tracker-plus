@@ -836,10 +836,17 @@
   const untilText = (m) => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr${m % 60 ? ` ${m % 60} min` : ""}`);
 
   // Timetable for a whole line in one direction (opened from the Map tab's line card).
+  // Running trains are cards with a progress bar coloured by how late they are;
+  // the rest are a compact list.
+  function delayClass(delay) {
+    if (delay == null) return "sched";
+    const m = Math.round(delay / 60);
+    return m >= 6 ? "late" : m >= 1 ? "minor" : m <= -1 ? "early" : "ontime";
+  }
   function renderLineTimetable(d, now) {
     const dirLabel = d.direction === "inbound" ? "toward downtown" : "away from downtown";
-    $("board-title").innerHTML = `${chip(d.route_short, d.color, d.text_color)} ${esc(d.route_name)}`;
-    $("board-swap").hidden = true;  // the line's own ⇅ button below swaps direction here
+    $("board-title").textContent = "Line timetable";
+    $("board-swap").hidden = true;  // the direction toggle below swaps here
     const asOf = d.data_as_of || {};
     $("board-updated").textContent = asOf.realtime_updated ? `Metra data ${fmtDateTime(asOf.realtime_updated)}` : "Metra data";
     $("board-updated").title = dataStatement(asOf, "train");
@@ -847,53 +854,64 @@
     $("data-line").hidden = false;
     $("board-list").innerHTML = "";
     showEmpty("");
-    const other = d.direction === "inbound" ? "Away from downtown" : "Toward downtown";
-    const html = [`<div class="tt-linebar"><span>All ${esc(d.route_short)} trains <b>${dirLabel}</b> today</span>
-      <button type="button" class="tt-swap" id="tt-swap" title="Swap direction">⇅ ${other}</button></div>`];
+    const running = d.trains.filter((t) => t.running);
+    const later = d.trains.filter((t) => !t.running);
+    const counts = [running.length ? `${running.length} on the way` : "", later.length ? `${later.length} more today` : ""]
+      .filter(Boolean).join(" · ") || "No more trains today";
+    const html = [`<div class="lt-hero" style="--line:${esc(d.color || "")}">
+        <div class="lt-name">${chip(d.route_short, d.color, d.text_color)}<b>${esc(d.route_name)}</b></div>
+        <div class="lt-sub">${esc(counts)}</div>
+      </div>
+      <div class="lt-dir" role="group" aria-label="Direction">
+        <button type="button" data-dir="inbound" aria-pressed="${d.direction === "inbound"}">Toward downtown</button>
+        <button type="button" data-dir="outbound" aria-pressed="${d.direction === "outbound"}">Away from downtown</button>
+      </div>`];
     if (!d.trains.length) {
       html.push(`<p class="muted tt-none">No more ${esc(d.route_short)} trains ${dirLabel} today.</p>`);
       $("tt").innerHTML = html.join("");
       return;
     }
-    const hourFmt = new Intl.DateTimeFormat([], { hour: "numeric", timeZone: state.tz });
-    // Running trains first (already on their way), then the rest by start time, grouped by hour.
-    const running = d.trains.filter((t) => t.running);
-    const later = d.trains.filter((t) => !t.running);
-    const row = (t) => {
-      const status = t.cancelled ? '<span class="badge cancel">Cancelled</span>'
-        : (t.live || t.tracking) && t.delay != null ? delayHtml(t.delay, t.tracking) || '<span class="delay ontime">On time</span>'
-        : '<span class="tt-sched">Scheduled</span>';
-      const m = Math.round((t.origin_time - now) / 60);
-      const when = t.running ? "" : m <= 0 ? "" : m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr${m % 60 ? ` ${m % 60} min` : ""}`;
-      const where = t.running && t.next_stop
-        ? `Next: <b>${esc(t.next_stop)}</b> · arrives ${esc(t.destination || "")} ${timeChange(t.dest_time_scheduled, t.dest_time)}`
-        : `${esc(t.origin)} → ${esc(t.destination || "")} · arrives ${timeChange(t.dest_time_scheduled, t.dest_time)}`;
-      return `<li class="tt-row${t.cancelled ? " cancelled" : ""}${t.running ? " next" : ""}" style="--line:${esc(t.color || d.color || "")}">
-        <span class="tt-time">${bigTime(t.origin_time)}</span>
-        <span class="tt-main">
-          <span class="tt-top">${t.train ? `<span class="muted">#${esc(t.train)}</span>` : ""}${status}</span>
-          <span class="tt-where">${where}</span>
-        </span>
-        <span class="tt-mins">${when}</span>
-      </li>`;
-    };
-    html.push('<ol class="tt-list">');
+    const status = (t) => t.cancelled ? '<span class="badge cancel">Cancelled</span>'
+      : (t.live || t.tracking) && t.delay != null ? delayHtml(t.delay, t.tracking)
+      : '<span class="tt-sched">Scheduled</span>';
     if (running.length) {
-      html.push('<li class="tt-hour">On the way now</li>');
-      running.forEach((t) => html.push(row(t)));
+      html.push('<h3 class="lt-head"><span class="lt-live"></span>On the way now</h3>');
+      for (const t of running) {
+        // How far along: time since it (likely) left vs. its scheduled run time.
+        const late = Math.max(0, t.delay || 0);
+        const span = Math.max(60, (t.dest_time_scheduled || t.dest_time) - t.origin_time);
+        const pct = Math.max(3, Math.min(97, ((now - t.origin_time - late) / span) * 100));
+        const cls = (t.live || t.tracking) ? delayClass(t.delay) : "sched";
+        html.push(`<div class="lt-card" data-trip="${esc(t.trip_id)}">
+          <div class="lt-card-top"><b>${t.train ? `#${esc(t.train)} ` : ""}to ${esc(t.destination || "")}</b>${status(t)}</div>
+          <div class="lt-bar ${cls}"><span style="width:${pct.toFixed(1)}%"></span></div>
+          <div class="lt-card-foot">
+            <span class="muted">${esc(t.origin)} ${fmtTime(t.origin_time)}</span>
+            ${t.next_stop ? `<span class="lt-next"><span class="muted">Next</span> <b>${esc(t.next_stop)}</b></span>` : ""}
+            <b class="lt-arr" title="Arrives ${esc(t.destination || "")}${t.dest_time !== t.dest_time_scheduled ? ` (scheduled ${fmtTime(t.dest_time_scheduled)})` : ""}">${fmtTime(t.dest_time)}</b>
+          </div>
+        </div>`);
+      }
     }
-    let lastHour = null;
-    for (const t of later) {
-      const hour = hourFmt.format(new Date(t.origin_time * 1000));
-      if (hour !== lastHour) { html.push(`<li class="tt-hour">${esc(hour)}</li>`); lastHour = hour; }
-      html.push(row(t));
+    if (later.length) {
+      html.push(`<h3 class="lt-head">${running.length ? "Later today" : "Still to come today"}</h3><ol class="lt-list">`);
+      for (const t of later) {
+        const m = Math.round((t.origin_time - now) / 60);
+        html.push(`<li class="lt-row${t.cancelled ? " cancelled" : ""}">
+          <span class="lt-time">${bigTime(t.origin_time)}</span>
+          <span class="lt-main"><span>${esc(t.destination || "")}${t.train ? ` <span class="muted small">#${esc(t.train)}</span>` : ""}</span>
+            <span class="muted small">arrives ${timeChange(t.dest_time_scheduled, t.dest_time)}${t.cancelled || t.live ? ` · ${status(t)}` : ""}</span></span>
+          <span class="lt-in">${m > 0 ? untilText(m) : ""}</span>
+        </li>`);
+      }
+      html.push("</ol>");
     }
-    html.push("</ol>");
     $("tt").innerHTML = html.join("");
   }
   $("tt").addEventListener("click", (e) => {
-    if (!e.target.closest("#tt-swap") || !state.ttLine) return;
-    state.ttLine = { ...state.ttLine, direction: state.ttLine.direction === "inbound" ? "outbound" : "inbound" };
+    const b = e.target.closest(".lt-dir button");
+    if (!b || !state.ttLine || b.dataset.dir === state.ttLine.direction) return;
+    state.ttLine = { ...state.ttLine, direction: b.dataset.dir };
     state.departures = null;
     refreshDepartures();
   });
