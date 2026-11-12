@@ -138,6 +138,19 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm-8.1 9.05L12 15.1l8.1-4.05L22 12l-10 5-10-5 1.9-.95Zm0 5L12 20.1l8.1-4.05L22 17l-10 5-10-5 1.9-.95Z"/></svg>
       </button>
       <div id="map-settings" class="map-settings" hidden></div>
+      <div id="map-head" class="map-head" hidden>
+        <div class="map-head-top">
+          <span class="map-head-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M9 4 3 6v14l6-2 6 2 6-2V4l-6 2-6-2Zm0 2.2 6 2v11.6l-6-2V6.2Z"/></svg></span>
+          <div><div class="map-head-title">System map</div><div class="map-head-sub" id="map-head-sub"></div></div>
+        </div>
+        <div class="line-chips" id="line-chips" role="tablist" aria-label="Lines"></div>
+      </div>
+      <div id="line-card" class="line-card" hidden>
+        <button type="button" class="line-card-x" id="line-card-x" aria-label="Show all lines">✕</button>
+        <div class="line-card-top" id="line-card-top"></div>
+        <div class="line-card-info" id="line-card-info"></div>
+        <button type="button" class="line-card-go" id="line-card-go" hidden></button>
+      </div>
       <div id="map-note" class="map-note" hidden></div>
       <div id="map-data" class="map-data" hidden></div>
       <button id="map-clear" class="map-clear" type="button" hidden></button>

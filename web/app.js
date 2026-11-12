@@ -192,12 +192,69 @@
     container: $("map"),
     onStationClick: (id) => selectStation(id, { pan: false }),
     popupHtml: trainPopup,
+    onLineFocus: (rid) => { renderMapHead(rid); refreshTrains(); },
     // A train tapped on the map: highlight it on the board too.
     onTrainSelect: (t) => {
       state.selectedTrip = t ? t.trip_id : null;
       // Highlight its row; on a computer also scroll the board to it (on a phone that would leave the map).
       markBoardSelection(!narrow());
     },
+  });
+
+  // ---------- Map tab: header with line chips, and a card for the focused line ----------
+  function mapRoutes() {
+    const routes = ((state.status && state.status.routes) || []).slice();
+    return routes.sort((a, b) => String(a.short_name).localeCompare(String(b.short_name)));
+  }
+  // Let the map's buttons and notes sit clear of the header and the line card.
+  function measureMapOverlays() {
+    const wrap = document.querySelector(".map-wrap");
+    const head = $("map-head"), card = $("line-card");
+    if (!head.hidden) wrap.style.setProperty("--map-head-h", `${head.offsetHeight + 20}px`);
+    if (!card.hidden) wrap.style.setProperty("--line-card-h", `${card.offsetHeight + 12}px`);
+  }
+  window.addEventListener("resize", () => requestAnimationFrame(measureMapOverlays));
+  function renderMapHead(focus = mapView.lineFocus) {
+    const routes = mapRoutes();
+    $("map-head-sub").textContent = `${routes.length} lines · ${state.stations.length} stations`;
+    const chip = (id, label, color) => `<button type="button" class="line-chip${(focus || null) === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${(focus || null) === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
+    $("line-chips").innerHTML = chip(null, "All", null) + routes.map((r) => chip(r.id, r.short_name, r.color)).join("");
+    const on = $("line-chips").querySelector(".line-chip.on");
+    if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+    renderLineCard(focus);
+  }
+  function renderLineCard(focus) {
+    const card = $("line-card");
+    const r = focus && mapRoutes().find((x) => x.id === focus);
+    document.querySelector(".map-wrap").classList.toggle("has-line-card", !!r);
+    if (!r) { if (!card.hidden) leave(card); return; }
+    const nStations = state.stations.filter((s) => s.routes.includes(r.id)).length;
+    const trains = ((mapView.lastTrains && mapView.lastTrains.trains) || []).filter((t) => t.route_id === r.id);
+    const late = trains.filter((t) => t.delay >= 360).length;
+    $("line-card-top").innerHTML = `${chip(r.short_name, r.color, r.text_color)}<b>${esc(r.long_name || r.short_name)}</b>`;
+    $("line-card-info").textContent = `${nStations} stations · ${trains.length} train${trains.length === 1 ? "" : "s"} on the map`
+      + (late ? ` · ${late} running 6+ min late` : "") + ". Tap a station to see its trains.";
+    // From a station on this line, jump to that line's trains on the board.
+    const st = state.station && state.stationById.get(state.station);
+    const go = $("line-card-go");
+    go.hidden = !(st && st.routes.includes(r.id));
+    if (!go.hidden) go.textContent = `${r.short_name} trains at ${st.name} ›`;
+    if (card.hidden) enter(card);
+    requestAnimationFrame(measureMapOverlays);
+  }
+  $("line-chips").addEventListener("click", (e) => {
+    const b = e.target.closest(".line-chip");
+    if (b) mapView.setLineFocus(b.dataset.route || null);
+  });
+  $("line-card-x").addEventListener("click", () => mapView.setLineFocus(null));
+  $("line-card-go").addEventListener("click", () => {
+    const rid = mapView.lineFocus;
+    if (!rid || !state.station) return;
+    state.dest = null; localStorage.removeItem(DEST_KEY); toPicker.sync();
+    state.line = { route: rid, direction: null };
+    $("tab-live").click();
+    state.departures = null;
+    refreshDepartures();
   });
 
   // ---------- train selection (board <-> map) ----------
@@ -254,12 +311,15 @@
     try { data = await api(dest ? `/api/trains?to=${encodeURIComponent(state.dest)}${from}` : "/api/trains"); } catch (e) { console.warn(e); return; }
     mapView.updateTrains(data);
     $("map-data").textContent = DISCLAIMER;
+    if (mapView.lineFocus) renderLineCard(mapView.lineFocus);
     const asOf = data.data_as_of || {};
     const when = asOf.realtime_updated ? ` · ${fmtDateTime(asOf.realtime_updated)}` : "";
     $("map-data").hidden = false;
-    const n = data.trains.length;
+    const focus = mapView.lineFocus;
+    const n = focus ? data.trains.filter((t) => t.route_id === focus).length : data.trains.length;
+    const focusName = focus ? `${(mapRoutes().find((r) => r.id === focus) || {}).short_name || focus} ` : "";
     const note = $("map-note");
-    note.textContent = `${n} train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}${when}`;
+    note.textContent = `${n} ${focusName}train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}${when}`;
     note.hidden = false;
   }
 
@@ -1009,6 +1069,11 @@
     const wasHidden = document.body.classList.contains("no-map");
     document.body.classList.toggle("no-map", mapHidden());
     document.body.classList.toggle("map-only", state.tab === "map");
+    if (state.tab === "map") { if ($("map-head").hidden) { renderMapHead(); enter($("map-head")); requestAnimationFrame(measureMapOverlays); } }
+    else {
+      $("map-head").hidden = true;
+      if (mapView.lineFocus) mapView.setLineFocus(null, { fit: false });
+    }
     if (wasMapOnly !== (state.tab === "map") || (wasHidden && !mapHidden())) fadeIn(document.querySelector(".map-wrap"));
     // The map's box changes size between tabs: fit it again (and catch up on trains if it was hidden).
     requestAnimationFrame(() => {
@@ -1340,6 +1405,7 @@
     $("data-version").textContent = s.static_version ? `Schedule version: ${s.static_version}.` : "";
     if (s.static_loaded && state.stations.length) refreshProfile();
     mapView.setMapStatus(s.map);
+    if (!$("map-head").hidden && state.stations.length) renderMapHead();
     return s.static_loaded;
   }
 
@@ -1389,6 +1455,7 @@
     else { state.station = null; refreshDepartures(); }
     // The board comes first; the map gets its data right after.
     mapView.setStations(stations);
+    if (!$("map-head").hidden) renderMapHead();
     if (lines) mapView.setLines(lines);
     else api("/api/lines").then((g) => mapView.setLines(g)).catch(console.warn);
     // Open the map framed on your commute rather than the whole system.
