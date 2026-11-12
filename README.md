@@ -195,6 +195,7 @@ Example: `curl "http://<your-server-ip>:8080/api/next?station=NAPERVILLE&directi
 | `GET /api/stations` | Stations with the lines that serve them. |
 | `GET /api/next?station=ID&direction=inbound` | **Next trains** at a station. `direction`: `inbound`/`to` = toward downtown, `outbound`/`from` = away, omit for both. `station` takes an id or a name. Optional `limit` (1–20). |
 | `GET /api/departures?station=ID&limit=5[&to=ID][&direction=inbound]` | Departure board (`limit` 1–50); with `to`, only trains that later stop there. |
+| `GET /api/line?route=ID[&direction=inbound]` | Every train on a line still to run today (running first): where it starts and ends, next stop and delay for running trains. Used by the Map tab's line panel. |
 | `GET /api/timetable?station=ID[&to=ID]` | Every train still to come today (until 3 AM, the end of Metra's service day), with live times where available. |
 | `GET /api/destinations?station=ID` | Stations reachable on a direct train, in line order, with the shortest ride time and direction. |
 | `GET /api/trains[?to=ID[&from=ID]]` | Train positions (live, or estimated from the schedule). With `to`, only trains that will still stop there; with `from` too, only those running from `from` toward `to`. |

@@ -854,3 +854,17 @@ def test_departures_filtered_by_line(tracker):
     rows = tracker.departures("A", limit=10, now=NOW, route="L2")["departures"]
     assert {r["trip_id"] for r in rows} == {"u-0815"}  # today's and tomorrow's run
     assert {r["route_id"] for r in tracker.departures("A", limit=10, now=NOW, route="L1", direction="inbound")["departures"]} == {"L1"}
+
+
+def test_line_trains_one_direction_running_first(tracker):
+    at = datetime(2026, 11, 9, 8, 5, tzinfo=TZ).timestamp()
+    _apply(tracker, [_tu("t-0800", [("B", 120), ("C", 120)])])  # 2 min late
+    out = tracker.line_trains("L1", "inbound", now=at)
+    ids = [t["trip_id"] for t in out["trains"]]
+    assert ids[0] == "t-0800" and "t-0830" in ids  # running first, then the 8:30
+    first = out["trains"][0]
+    assert first["running"] and first["delay"] == 120 and first["origin"] == "Alpha" and first["next_stop"] == "Bravo"
+    assert all(t["direction"] == "inbound" for t in out["trains"])
+    assert tracker.line_trains("L1", "outbound", now=at)["trains"] == []  # nothing runs away from Central
+    with pytest.raises(KeyError):
+        tracker.line_trains("NOPE", now=at)
