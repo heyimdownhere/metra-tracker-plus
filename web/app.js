@@ -210,13 +210,12 @@
   function measureMapOverlays() {
     const wrap = document.querySelector(".map-wrap");
     const head = $("map-head"), card = $("line-card");
-    if (!head.hidden) wrap.style.setProperty("--map-head-h", `${head.offsetHeight + 20}px`);
+    if (!head.hidden) wrap.style.setProperty("--map-head-h", `${head.offsetHeight + 4}px`);
     if (!card.hidden) wrap.style.setProperty("--line-card-h", `${card.offsetHeight + 12}px`);
   }
   window.addEventListener("resize", () => requestAnimationFrame(measureMapOverlays));
   function renderMapHead(focus = mapView.lineFocus) {
     const routes = mapRoutes();
-    $("map-head-sub").textContent = `${routes.length} lines · ${state.stations.length} stations`;
     const chip = (id, label, color) => `<button type="button" class="line-chip${(focus || null) === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${(focus || null) === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
     $("line-chips").innerHTML = chip(null, "All", null) + routes.map((r) => chip(r.id, r.short_name, r.color)).join("");
     const on = $("line-chips").querySelector(".line-chip.on");
