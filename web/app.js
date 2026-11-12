@@ -226,19 +226,13 @@
     const card = $("line-card");
     const r = focus && mapRoutes().find((x) => x.id === focus);
     document.querySelector(".map-wrap").classList.toggle("has-line-card", !!r);
-    if (lineSheet.open && lineSheet.route !== (r && r.id)) setLineSheet(false);
     if (!r) { if (!card.hidden) leave(card); return; }
     const nStations = state.stations.filter((s) => s.routes.includes(r.id)).length;
     const trains = ((mapView.lastTrains && mapView.lastTrains.trains) || []).filter((t) => t.route_id === r.id);
     const late = trains.filter((t) => t.delay >= 360).length;
     $("line-card-top").innerHTML = `${chip(r.short_name, r.color, r.text_color)}<b>${esc(r.long_name || r.short_name)}</b>`;
     $("line-card-info").textContent = `${nStations} stations · ${trains.length} train${trains.length === 1 ? "" : "s"} on the map`
-      + (late ? ` · ${late} running 6+ min late` : "");
-    // From a station on this line, jump to that line's trains on the board.
-    const st = state.station && state.stationById.get(state.station);
-    const go = $("line-card-go");
-    go.hidden = !(st && st.routes.includes(r.id));
-    if (!go.hidden) go.textContent = `${r.short_name} trains at ${st.name} ›`;
+      + (late ? ` · ${late} running 6+ min late` : "") + ". Tap a station to see its trains.";
     if (card.hidden) enter(card);
     requestAnimationFrame(measureMapOverlays);
   }
@@ -246,78 +240,23 @@
     const b = e.target.closest(".line-chip");
     if (b) mapView.setLineFocus(b.dataset.route || null);
   });
-  $("line-card-x").addEventListener("click", () => {
-    if (lineSheet.open) { setLineSheet(false); return; }  // ✕ first folds the train list
-    mapView.setLineFocus(null);
-  });
-
-  // ---- the line's trains (tap the line card): all trains one way, swap with the toggle ----
-  const lineSheet = { open: false, direction: null, route: null };
+  $("line-card-x").addEventListener("click", () => mapView.setLineFocus(null));
+  // Tap the line card: open the Timetable tab for this line, direction by time of day.
+  state.ttLine = null;  // {route, direction} while the Timetable shows a whole line
   function defaultDirection() {
-    // Toward downtown before the commute switch time (or noon), away after.
+    // Toward downtown before the commute switch time (or noon), away from downtown after.
     const sw = (state.home && state.home.switch_time) || "12:00";
-    const parts = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: state.tz })
+    const hhmm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: state.tz })
       .format(new Date(serverNow() * 1000));
-    return parts < sw ? "inbound" : "outbound";
+    return hhmm < sw ? "inbound" : "outbound";
   }
-  function setLineSheet(open) {
-    lineSheet.open = open;
-    lineSheet.route = open ? mapView.lineFocus : null;
-    if (open && !lineSheet.direction) lineSheet.direction = defaultDirection();
-    $("line-card").classList.toggle("expanded", open);
-    $("line-card-open").setAttribute("aria-expanded", String(open));
-    $("line-card-more").textContent = open ? "Hide trains ▾" : "Trains on this line ›";
-    if (open) {
-      document.querySelectorAll("input[name=line-dir]").forEach((r) => { r.checked = r.value === lineSheet.direction; });
-      enter($("line-sheet"));
-      $("line-trains").innerHTML = '<li class="muted lt-empty">Loading…</li>';
-      refreshLineSheet();
-    } else {
-      $("line-sheet").hidden = true;
-      lineSheet.direction = null;  // next time, pick by time of day again
-    }
-    requestAnimationFrame(measureMapOverlays);
-  }
-  async function refreshLineSheet() {
-    if (!lineSheet.open || !lineSheet.route) return;
-    const { route, direction } = lineSheet;
-    let d;
-    try { d = await api(`/api/line?route=${encodeURIComponent(route)}&direction=${direction}`); } catch (e) { console.warn(e); return; }
-    if (!lineSheet.open || lineSheet.route !== route || lineSheet.direction !== direction) return;
-    const now = serverNow();
-    const rows = d.trains.map((t) => {
-      const late = (t.live || t.tracking) && t.delay != null;
-      const status = t.cancelled ? '<span class="badge cancel">Cancelled</span>'
-        : t.running ? `${late ? delayHtml(t.delay, t.tracking) : '<span class="muted">Running</span>'}`
-        : `<span class="muted">${(() => { const m = Math.round((t.origin_time - now) / 60); return m <= -2 ? "Arriving" : m <= 0 ? "Starting" : m < 60 ? `in ${m} min` : `in ${Math.floor(m / 60)} hr ${m % 60 ? `${m % 60} min` : ""}`; })()}</span>`;
-      const where = t.running && t.next_stop ? `Next: <b>${esc(t.next_stop)}</b>` : `Leaves ${esc(t.origin)} <b>${esc(fmtTime(t.origin_time))}</b>`;
-      const arr = `Arrives ${esc(t.destination || "")} ${timeChange(t.dest_time_scheduled, t.dest_time)}`;
-      return `<li class="lt${t.running ? " running" : ""}${t.cancelled ? " cancelled" : ""}" data-trip="${esc(t.trip_id)}" style="--line:${esc(t.color || "")}">
-        <div class="lt-top"><span class="lt-route">${t.train ? `#${esc(t.train)} · ` : ""}${esc(t.origin)} → ${esc(t.destination || "")}</span><span class="lt-status">${status}</span></div>
-        <div class="lt-sub">${where} · ${arr}</div>
-      </li>`;
-    });
-    $("line-trains").innerHTML = rows.join("") || `<li class="muted lt-empty">No more ${direction === "inbound" ? "trains toward downtown" : "trains away from downtown"} on this line today.</li>`;
-  }
-  $("line-card-open").addEventListener("click", () => setLineSheet(!lineSheet.open));
-  document.querySelectorAll("input[name=line-dir]").forEach((r) => r.addEventListener("change", () => {
-    if (!r.checked) return;
-    lineSheet.direction = r.value;
-    $("line-trains").innerHTML = '<li class="muted lt-empty">Loading…</li>';
-    refreshLineSheet();
-  }));
-  $("line-trains").addEventListener("click", (e) => {
-    const li = e.target.closest(".lt.running[data-trip]");
-    if (li) mapView.selectTrip(li.dataset.trip, lineSheet.route);  // show it on the map
-  });
-  $("line-card-go").addEventListener("click", () => {
+  $("line-card-open").addEventListener("click", () => {
     const rid = mapView.lineFocus;
-    if (!rid || !state.station) return;
-    state.dest = null; localStorage.removeItem(DEST_KEY); toPicker.sync();
-    state.line = { route: rid, direction: null };
-    $("tab-live").click();
-    state.departures = null;
-    refreshDepartures();
+    if (!rid) return;
+    state.ttLine = { route: rid, direction: defaultDirection() };
+    if (state.tab !== "timetable") $("tab-timetable").click();
+    else { state.departures = null; refreshDepartures(); }
+    updateClear();
   });
 
   // ---------- train selection (board <-> map) ----------
@@ -375,7 +314,6 @@
     mapView.updateTrains(data);
     $("map-data").textContent = DISCLAIMER;
     if (mapView.lineFocus) renderLineCard(mapView.lineFocus);
-    refreshLineSheet();
     const asOf = data.data_as_of || {};
     const when = asOf.realtime_updated ? ` · ${fmtDateTime(asOf.realtime_updated)}` : "";
     $("map-data").hidden = false;
@@ -551,6 +489,7 @@
   function clearView() {
     state.selectedTrip = null;
     state.line = null;
+    state.ttLine = null;
     mapView.clearSelection(false);
     mapView.closePopups();
     state.station = null;
@@ -561,7 +500,7 @@
     mapView.fitLines();
   }
   function updateClear() {
-    $("clear-btn").hidden = !(state.station || state.dest || state.selectedTrip || state.line);
+    $("clear-btn").hidden = !(state.station || state.dest || state.selectedTrip || state.line || state.ttLine);
     const chip = $("map-clear");
     const dest = state.dest && state.stationById.get(state.dest);
     if (state.tab === "map" && dest) { if (chip.hidden) enter(chip); } else chip.hidden = true;
@@ -597,6 +536,7 @@
     if (!st) return;
     state.station = id;
     state.line = null;
+    state.ttLine = null;
     localStorage.setItem(STATION_KEY, id);
     loadDests(id).then(() => {
       if (state.station !== id) return;
@@ -668,7 +608,7 @@
     // One station can't be both: at your home only "Home" shows, at work only "Work".
     homeBtn.hidden = !state.station || isWork();
     workBtn.hidden = !state.station || atHome;
-    $("board-swap").hidden = !(state.station && state.dest);
+    $("board-swap").hidden = !(state.station && state.dest) || (state.tab === "timetable" && !!state.ttLine);
     updateClear();
     homeBtn.classList.toggle("is-home", atHome);
     $("home-btn-text").textContent = atHome ? "Home" : "Set as home";
@@ -816,6 +756,17 @@
   }
 
   async function refreshDepartures() {
+    if (state.tab === "timetable" && state.ttLine) {
+      const { route, direction } = state.ttLine;
+      let d;
+      try { d = await api(`/api/line?route=${encodeURIComponent(route)}&direction=${direction}`); } catch (e) { console.warn(e); return; }
+      if (state.tab !== "timetable" || !state.ttLine || state.ttLine.route !== route || state.ttLine.direction !== direction) return;
+      d.tab = "timetable";
+      d.kind = "line";
+      state.departures = d;
+      renderBoard();
+      return;
+    }
     if (!state.station) {
       $("data-line").hidden = true;
       state.departures = null;  // so the 15 s re-render doesn't bring the old board back
@@ -884,6 +835,69 @@
 
   const untilText = (m) => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr${m % 60 ? ` ${m % 60} min` : ""}`);
 
+  // Timetable for a whole line in one direction (opened from the Map tab's line card).
+  function renderLineTimetable(d, now) {
+    const dirLabel = d.direction === "inbound" ? "toward downtown" : "away from downtown";
+    $("board-title").innerHTML = `${chip(d.route_short, d.color, d.text_color)} ${esc(d.route_name)}`;
+    $("board-swap").hidden = true;  // the line's own ⇅ button below swaps direction here
+    const asOf = d.data_as_of || {};
+    $("board-updated").textContent = asOf.realtime_updated ? `Metra data ${fmtDateTime(asOf.realtime_updated)}` : "Metra data";
+    $("board-updated").title = dataStatement(asOf, "train");
+    $("data-line").textContent = DISCLAIMER;
+    $("data-line").hidden = false;
+    $("board-list").innerHTML = "";
+    showEmpty("");
+    const other = d.direction === "inbound" ? "Away from downtown" : "Toward downtown";
+    const html = [`<div class="tt-linebar"><span>All ${esc(d.route_short)} trains <b>${dirLabel}</b> today</span>
+      <button type="button" class="tt-swap" id="tt-swap" title="Swap direction">⇅ ${other}</button></div>`];
+    if (!d.trains.length) {
+      html.push(`<p class="muted tt-none">No more ${esc(d.route_short)} trains ${dirLabel} today.</p>`);
+      $("tt").innerHTML = html.join("");
+      return;
+    }
+    const hourFmt = new Intl.DateTimeFormat([], { hour: "numeric", timeZone: state.tz });
+    // Running trains first (already on their way), then the rest by start time, grouped by hour.
+    const running = d.trains.filter((t) => t.running);
+    const later = d.trains.filter((t) => !t.running);
+    const row = (t) => {
+      const status = t.cancelled ? '<span class="badge cancel">Cancelled</span>'
+        : (t.live || t.tracking) && t.delay != null ? delayHtml(t.delay, t.tracking) || '<span class="delay ontime">On time</span>'
+        : '<span class="tt-sched">Scheduled</span>';
+      const m = Math.round((t.origin_time - now) / 60);
+      const when = t.running ? "" : m <= 0 ? "" : m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr${m % 60 ? ` ${m % 60} min` : ""}`;
+      const where = t.running && t.next_stop
+        ? `Next: <b>${esc(t.next_stop)}</b> · arrives ${esc(t.destination || "")} ${timeChange(t.dest_time_scheduled, t.dest_time)}`
+        : `${esc(t.origin)} → ${esc(t.destination || "")} · arrives ${timeChange(t.dest_time_scheduled, t.dest_time)}`;
+      return `<li class="tt-row${t.cancelled ? " cancelled" : ""}${t.running ? " next" : ""}" style="--line:${esc(t.color || d.color || "")}">
+        <span class="tt-time">${bigTime(t.origin_time)}</span>
+        <span class="tt-main">
+          <span class="tt-top">${t.train ? `<span class="muted">#${esc(t.train)}</span>` : ""}${status}</span>
+          <span class="tt-where">${where}</span>
+        </span>
+        <span class="tt-mins">${when}</span>
+      </li>`;
+    };
+    html.push('<ol class="tt-list">');
+    if (running.length) {
+      html.push('<li class="tt-hour">On the way now</li>');
+      running.forEach((t) => html.push(row(t)));
+    }
+    let lastHour = null;
+    for (const t of later) {
+      const hour = hourFmt.format(new Date(t.origin_time * 1000));
+      if (hour !== lastHour) { html.push(`<li class="tt-hour">${esc(hour)}</li>`); lastHour = hour; }
+      html.push(row(t));
+    }
+    html.push("</ol>");
+    $("tt").innerHTML = html.join("");
+  }
+  $("tt").addEventListener("click", (e) => {
+    if (!e.target.closest("#tt-swap") || !state.ttLine) return;
+    state.ttLine = { ...state.ttLine, direction: state.ttLine.direction === "inbound" ? "outbound" : "inbound" };
+    state.departures = null;
+    refreshDepartures();
+  });
+
   // Today's timetable: every train still to come, compact, grouped by hour.
   function renderTimetable(d, now, from) {
     const el = $("tt");
@@ -947,6 +961,7 @@
     renderBoardNotice();
     if (!d) return;
     const now = serverNow();
+    if (d.kind === "line") { renderLineTimetable(d, now); return; }
     const from = d.station ? d.station.name : "";
     const tag = viewTag();
     // Station names are buttons that show that station on the map (not on the timetable tab, which has no map).
