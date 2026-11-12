@@ -68,7 +68,7 @@
 
   function isLight() { return document.documentElement.dataset.theme === "light"; }
 
-  function createMap({ container, onStationClick, popupHtml, onTrainSelect }) {
+  function createMap({ container, onStationClick, popupHtml, onTrainSelect, onLineFocus }) {
     const settings = loadSettings();
     const save = () => localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 
@@ -347,6 +347,10 @@
         layout: { "line-cap": "round", "line-join": "round" },
         paint: { "line-color": ["get", "color"], "line-width": 4, "line-opacity": 0.9 },
       });
+      map.addLayer({
+        id: "lines-hit", type: "line", source: "lines",
+        paint: { "line-color": "#000", "line-width": 18, "line-opacity": 0 },
+      });
       map.addSource("stations", { type: "geojson", data: stationsData });
       map.addLayer({
         id: "stations", type: "circle", source: "stations",
@@ -359,6 +363,7 @@
         },
       });
       applyAll(false);
+      applyLineFocus();
       markReady();
     }
     map.on("style.load", addOverlays);
@@ -467,7 +472,7 @@
     async function setStations(list) {
       stationsData = {
         type: "FeatureCollection",
-        features: list.map((s) => ({ type: "Feature", properties: { id: s.id, name: s.name }, geometry: { type: "Point", coordinates: [s.lon, s.lat] } })),
+        features: list.map((s) => ({ type: "Feature", properties: { id: s.id, name: s.name, routes: `|${(s.routes || []).join("|")}|` }, geometry: { type: "Point", coordinates: [s.lon, s.lat] } })),
       };
       await ready;
       if (map.getSource("stations")) map.getSource("stations").setData(stationsData);
@@ -477,6 +482,7 @@
       const el = document.createElement("div");
       el.className = "train-marker";
       if (t.trip_id) el.dataset.trip = t.trip_id;
+      if (t.route_id) el.dataset.route = t.route_id;
       el.setAttribute("role", "button");
       el.setAttribute("aria-label", `${t.route_short || "Train"} to ${t.destination || "unknown"}`);
       styleTrainEl(el, t);
@@ -487,13 +493,52 @@
       el.innerHTML = `<div class="train-dot${t.live ? "" : " est"}${t.delay >= 360 ? " late" : ""}" style="--c:${t.color}">${rot ? `<span class="arrow" style="--rot:${rot}"></span>` : ""}</div>`;
     }
 
+    // ---- one line in focus (Map tab chips / tapping a line) -------------------
+    let lineFocus = null;  // route id
+    function applyLineFocus() {
+      if (map.getLayer("stations")) map.setFilter("stations", lineFocus ? ["in", `|${lineFocus}|`, ["get", "routes"]] : null);
+      for (const m of trainMarkers.values()) {
+        const el = m.getElement();
+        el.classList.toggle("off-line", !!lineFocus && el.dataset.route !== lineFocus);
+      }
+      applyLineHighlight();
+    }
+    function lineBounds(rid) {
+      const b = new maplibregl.LngLatBounds();
+      for (const f of linesData.features) if (f.properties.route_id === rid) for (const c of f.geometry.coordinates) b.extend(c);
+      return b.isEmpty() ? null : b;
+    }
+    // Focus one line (or null for all): highlight it, show only its trains and stations, fit it on screen.
+    function setLineFocus(rid, opts = {}) {
+      lineFocus = rid || null;
+      ready.then(() => {
+        applyLineFocus();
+        if (opts.fit !== false) {
+          const b = lineFocus ? lineBounds(lineFocus) : null;
+          const pad = opts.padding || { top: 150, bottom: 170, left: 40, right: 40 };
+          if (b) map.fitBounds(b, { padding: pad, maxZoom: 12, duration: 700 });
+          else if (!lineFocus) fitLines();
+        }
+      });
+      if (onLineFocus && !opts.silent) onLineFocus(lineFocus);
+    }
+    map.on("mouseenter", "lines-hit", () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", "lines-hit", () => { map.getCanvas().style.cursor = ""; });
+    map.on("click", "lines-hit", (e) => {
+      const target = e.originalEvent && e.originalEvent.target;
+      if (target && target.closest && target.closest(".maplibregl-marker, .maplibregl-popup")) return;
+      if (map.queryRenderedFeatures(e.point, { layers: ["stations"] }).length) return;  // a station tap wins
+      const rid = e.features[0] && e.features[0].properties.route_id;
+      if (rid && rid !== lineFocus) setLineFocus(rid, { fit: false });
+    });
+
     // ---- selected train: its marker ringed, its line highlighted -------------
     let selected = null;  // {id, tripId, routeId}
     function applyLineHighlight() {
       if (!map.getLayer("lines")) return;
       const op = settings.lineOpacity / 100;
       const w = (k) => ["interpolate", ["linear"], ["zoom"], 8, settings.lineWidth * 0.6 * k, 14, settings.lineWidth * 1.6 * k];
-      const rid = selected && selected.routeId;
+      const rid = (selected && selected.routeId) || lineFocus;
       map.setPaintProperty("lines", "line-opacity", rid ? ["case", ["==", ["get", "route_id"], rid], Math.max(op, 0.95), op * 0.25] : op);
       map.setPaintProperty("lines", "line-width", rid ? ["case", ["==", ["get", "route_id"], rid], w(1.5), w(1)] : w(1));
     }
@@ -569,6 +614,7 @@
         if (t) selected.id = t.id;
       }
       markSelected();
+      if (lineFocus) applyLineFocus();
     }
     // Refresh open popups (e.g. after the board changes).
     function refreshPopups() {
@@ -667,6 +713,8 @@
       selectTrip,
       clearSelection,
       fitLines,
+      setLineFocus,
+      get lineFocus() { return lineFocus; },
       closePopups() { for (const m of trainMarkers.values()) if (m.getPopup().isOpen()) m.togglePopup(); },
       refreshPopups,
       get selectedTrip() { return selected && selected.tripId; },

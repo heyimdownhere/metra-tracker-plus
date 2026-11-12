@@ -138,6 +138,17 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 2 10 5-10 5L2 7l10-5Zm-8.1 9.05L12 15.1l8.1-4.05L22 12l-10 5-10-5 1.9-.95Zm0 5L12 20.1l8.1-4.05L22 17l-10 5-10-5 1.9-.95Z"/></svg>
       </button>
       <div id="map-settings" class="map-settings" hidden></div>
+      <div id="map-head" class="map-head" hidden>
+        <div class="line-chips" id="line-chips" role="tablist" aria-label="Lines"></div>
+      </div>
+      <div id="line-card" class="line-card" hidden>
+        <button type="button" class="line-card-x" id="line-card-x" aria-label="Show all lines">✕</button>
+        <button type="button" class="line-card-open" id="line-card-open" title="Open this line's timetable">
+          <div class="line-card-top" id="line-card-top"></div>
+          <div class="line-card-info" id="line-card-info"></div>
+          <span class="line-card-more">Timetable ›</span>
+        </button>
+      </div>
       <div id="map-note" class="map-note" hidden></div>
       <div id="map-data" class="map-data" hidden></div>
       <button id="map-clear" class="map-clear" type="button" hidden></button>

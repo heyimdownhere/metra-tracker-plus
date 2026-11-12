@@ -192,12 +192,71 @@
     container: $("map"),
     onStationClick: (id) => selectStation(id, { pan: false }),
     popupHtml: trainPopup,
+    onLineFocus: (rid) => { renderMapHead(rid); refreshTrains(); },
     // A train tapped on the map: highlight it on the board too.
     onTrainSelect: (t) => {
       state.selectedTrip = t ? t.trip_id : null;
       // Highlight its row; on a computer also scroll the board to it (on a phone that would leave the map).
       markBoardSelection(!narrow());
     },
+  });
+
+  // ---------- Map tab: header with line chips, and a card for the focused line ----------
+  function mapRoutes() {
+    const routes = ((state.status && state.status.routes) || []).slice();
+    return routes.sort((a, b) => String(a.short_name).localeCompare(String(b.short_name)));
+  }
+  // Let the map's buttons and notes sit clear of the header and the line card.
+  function measureMapOverlays() {
+    const wrap = document.querySelector(".map-wrap");
+    const head = $("map-head"), card = $("line-card");
+    if (!head.hidden) wrap.style.setProperty("--map-head-h", `${head.offsetHeight + 4}px`);
+    if (!card.hidden) wrap.style.setProperty("--line-card-h", `${card.offsetHeight + 12}px`);
+  }
+  window.addEventListener("resize", () => requestAnimationFrame(measureMapOverlays));
+  function renderMapHead(focus = mapView.lineFocus) {
+    const routes = mapRoutes();
+    const chip = (id, label, color) => `<button type="button" class="line-chip${(focus || null) === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${(focus || null) === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
+    $("line-chips").innerHTML = chip(null, "All", null) + routes.map((r) => chip(r.id, r.short_name, r.color)).join("");
+    const on = $("line-chips").querySelector(".line-chip.on");
+    if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+    renderLineCard(focus);
+  }
+  function renderLineCard(focus) {
+    const card = $("line-card");
+    const r = focus && mapRoutes().find((x) => x.id === focus);
+    document.querySelector(".map-wrap").classList.toggle("has-line-card", !!r);
+    if (!r) { if (!card.hidden) leave(card); return; }
+    const nStations = state.stations.filter((s) => s.routes.includes(r.id)).length;
+    const trains = ((mapView.lastTrains && mapView.lastTrains.trains) || []).filter((t) => t.route_id === r.id);
+    const late = trains.filter((t) => t.delay >= 360).length;
+    $("line-card-top").innerHTML = `${chip(r.short_name, r.color, r.text_color)}<b>${esc(r.long_name || r.short_name)}</b>`;
+    $("line-card-info").textContent = `${nStations} stations · ${trains.length} train${trains.length === 1 ? "" : "s"} on the map`
+      + (late ? ` · ${late} running 6+ min late` : "") + ". Tap a station to see its trains.";
+    if (card.hidden) enter(card);
+    requestAnimationFrame(measureMapOverlays);
+  }
+  $("line-chips").addEventListener("click", (e) => {
+    const b = e.target.closest(".line-chip");
+    if (b) mapView.setLineFocus(b.dataset.route || null);
+  });
+  $("line-card-x").addEventListener("click", () => mapView.setLineFocus(null));
+  // Tap the line card: open the Timetable tab for this line, direction by time of day.
+  state.ttLine = null;  // {route, direction} while the Timetable shows a whole line
+  function defaultDirection() {
+    // Toward downtown before the commute switch time (or noon), away from downtown after.
+    const sw = (state.home && state.home.switch_time) || "12:00";
+    const hhmm = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: state.tz })
+      .format(new Date(serverNow() * 1000));
+    return hhmm < sw ? "inbound" : "outbound";
+  }
+  $("line-card-open").addEventListener("click", () => {
+    const rid = mapView.lineFocus;
+    if (!rid) return;
+    state.ttLine = { route: rid, direction: defaultDirection() };
+    if (state.tab !== "timetable") $("tab-timetable").click();
+    else { state.departures = null; refreshDepartures(); }
+    updateClear();
   });
 
   // ---------- train selection (board <-> map) ----------
@@ -254,12 +313,15 @@
     try { data = await api(dest ? `/api/trains?to=${encodeURIComponent(state.dest)}${from}` : "/api/trains"); } catch (e) { console.warn(e); return; }
     mapView.updateTrains(data);
     $("map-data").textContent = DISCLAIMER;
+    if (mapView.lineFocus) renderLineCard(mapView.lineFocus);
     const asOf = data.data_as_of || {};
     const when = asOf.realtime_updated ? ` · ${fmtDateTime(asOf.realtime_updated)}` : "";
     $("map-data").hidden = false;
-    const n = data.trains.length;
+    const focus = mapView.lineFocus;
+    const n = focus ? data.trains.filter((t) => t.route_id === focus).length : data.trains.length;
+    const focusName = focus ? `${(mapRoutes().find((r) => r.id === focus) || {}).short_name || focus} ` : "";
     const note = $("map-note");
-    note.textContent = `${n} train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}${when}`;
+    note.textContent = `${n} ${focusName}train${n === 1 ? "" : "s"}${dest ? ` to ${dest.name}` : ""} · ${data.source === "schedule" ? "positions estimated from schedule" : "live positions"}${when}`;
     note.hidden = false;
   }
 
@@ -427,6 +489,7 @@
   function clearView() {
     state.selectedTrip = null;
     state.line = null;
+    state.ttLine = null;
     mapView.clearSelection(false);
     mapView.closePopups();
     state.station = null;
@@ -437,7 +500,7 @@
     mapView.fitLines();
   }
   function updateClear() {
-    $("clear-btn").hidden = !(state.station || state.dest || state.selectedTrip || state.line);
+    $("clear-btn").hidden = !(state.station || state.dest || state.selectedTrip || state.line || state.ttLine);
     const chip = $("map-clear");
     const dest = state.dest && state.stationById.get(state.dest);
     if (state.tab === "map" && dest) { if (chip.hidden) enter(chip); } else chip.hidden = true;
@@ -473,6 +536,7 @@
     if (!st) return;
     state.station = id;
     state.line = null;
+    state.ttLine = null;
     localStorage.setItem(STATION_KEY, id);
     loadDests(id).then(() => {
       if (state.station !== id) return;
@@ -544,7 +608,7 @@
     // One station can't be both: at your home only "Home" shows, at work only "Work".
     homeBtn.hidden = !state.station || isWork();
     workBtn.hidden = !state.station || atHome;
-    $("board-swap").hidden = !(state.station && state.dest);
+    $("board-swap").hidden = !(state.station && state.dest) || (state.tab === "timetable" && !!state.ttLine);
     updateClear();
     homeBtn.classList.toggle("is-home", atHome);
     $("home-btn-text").textContent = atHome ? "Home" : "Set as home";
@@ -692,6 +756,17 @@
   }
 
   async function refreshDepartures() {
+    if (state.tab === "timetable" && state.ttLine) {
+      const { route, direction } = state.ttLine;
+      let d;
+      try { d = await api(`/api/line?route=${encodeURIComponent(route)}&direction=${direction}`); } catch (e) { console.warn(e); return; }
+      if (state.tab !== "timetable" || !state.ttLine || state.ttLine.route !== route || state.ttLine.direction !== direction) return;
+      d.tab = "timetable";
+      d.kind = "line";
+      state.departures = d;
+      renderBoard();
+      return;
+    }
     if (!state.station) {
       $("data-line").hidden = true;
       state.departures = null;  // so the 15 s re-render doesn't bring the old board back
@@ -760,6 +835,87 @@
 
   const untilText = (m) => (m < 60 ? `${m} min` : `${Math.floor(m / 60)} hr${m % 60 ? ` ${m % 60} min` : ""}`);
 
+  // Timetable for a whole line in one direction (opened from the Map tab's line card).
+  // Running trains are cards with a progress bar coloured by how late they are;
+  // the rest are a compact list.
+  function delayClass(delay) {
+    if (delay == null) return "sched";
+    const m = Math.round(delay / 60);
+    return m >= 6 ? "late" : m >= 1 ? "minor" : m <= -1 ? "early" : "ontime";
+  }
+  function renderLineTimetable(d, now) {
+    const dirLabel = d.direction === "inbound" ? "toward downtown" : "away from downtown";
+    $("board-title").textContent = "Line timetable";
+    $("board-swap").hidden = true;  // the direction toggle below swaps here
+    const asOf = d.data_as_of || {};
+    $("board-updated").textContent = asOf.realtime_updated ? `Metra data ${fmtDateTime(asOf.realtime_updated)}` : "Metra data";
+    $("board-updated").title = dataStatement(asOf, "train");
+    $("data-line").textContent = DISCLAIMER;
+    $("data-line").hidden = false;
+    $("board-list").innerHTML = "";
+    showEmpty("");
+    const running = d.trains.filter((t) => t.running);
+    const later = d.trains.filter((t) => !t.running);
+    const counts = [running.length ? `${running.length} on the way` : "", later.length ? `${later.length} more today` : ""]
+      .filter(Boolean).join(" · ") || "No more trains today";
+    const html = [`<div class="lt-hero" style="--line:${esc(d.color || "")}">
+        <div class="lt-name">${chip(d.route_short, d.color, d.text_color)}<b>${esc(d.route_name)}</b></div>
+        <div class="lt-sub">${esc(counts)}</div>
+      </div>
+      <div class="lt-dir" role="group" aria-label="Direction">
+        <button type="button" data-dir="inbound" aria-pressed="${d.direction === "inbound"}">Toward downtown</button>
+        <button type="button" data-dir="outbound" aria-pressed="${d.direction === "outbound"}">Away from downtown</button>
+      </div>`];
+    if (!d.trains.length) {
+      html.push(`<p class="muted tt-none">No more ${esc(d.route_short)} trains ${dirLabel} today.</p>`);
+      $("tt").innerHTML = html.join("");
+      return;
+    }
+    const status = (t) => t.cancelled ? '<span class="badge cancel">Cancelled</span>'
+      : (t.live || t.tracking) && t.delay != null ? delayHtml(t.delay, t.tracking)
+      : '<span class="tt-sched">Scheduled</span>';
+    if (running.length) {
+      html.push('<h3 class="lt-head"><span class="lt-live"></span>On the way now</h3>');
+      for (const t of running) {
+        // How far along: time since it (likely) left vs. its scheduled run time.
+        const late = Math.max(0, t.delay || 0);
+        const span = Math.max(60, (t.dest_time_scheduled || t.dest_time) - t.origin_time);
+        const pct = Math.max(3, Math.min(97, ((now - t.origin_time - late) / span) * 100));
+        const cls = (t.live || t.tracking) ? delayClass(t.delay) : "sched";
+        html.push(`<div class="lt-card" data-trip="${esc(t.trip_id)}">
+          <div class="lt-card-top"><b>${t.train ? `#${esc(t.train)} ` : ""}to ${esc(t.destination || "")}</b>${status(t)}</div>
+          <div class="lt-bar ${cls}"><span style="width:${pct.toFixed(1)}%"></span></div>
+          <div class="lt-card-foot">
+            <span class="muted">${esc(t.origin)} ${fmtTime(t.origin_time)}</span>
+            ${t.next_stop ? `<span class="lt-next"><span class="muted">Next</span> <b>${esc(t.next_stop)}</b></span>` : ""}
+            <b class="lt-arr" title="Arrives ${esc(t.destination || "")}${t.dest_time !== t.dest_time_scheduled ? ` (scheduled ${fmtTime(t.dest_time_scheduled)})` : ""}">${fmtTime(t.dest_time)}</b>
+          </div>
+        </div>`);
+      }
+    }
+    if (later.length) {
+      html.push(`<h3 class="lt-head">${running.length ? "Later today" : "Still to come today"}</h3><ol class="lt-list">`);
+      for (const t of later) {
+        const m = Math.round((t.origin_time - now) / 60);
+        html.push(`<li class="lt-row${t.cancelled ? " cancelled" : ""}">
+          <span class="lt-time">${bigTime(t.origin_time)}</span>
+          <span class="lt-main"><span>${esc(t.destination || "")}${t.train ? ` <span class="muted small">#${esc(t.train)}</span>` : ""}</span>
+            <span class="muted small">arrives ${timeChange(t.dest_time_scheduled, t.dest_time)}${t.cancelled || t.live ? ` · ${status(t)}` : ""}</span></span>
+          <span class="lt-in">${m > 0 ? untilText(m) : ""}</span>
+        </li>`);
+      }
+      html.push("</ol>");
+    }
+    $("tt").innerHTML = html.join("");
+  }
+  $("tt").addEventListener("click", (e) => {
+    const b = e.target.closest(".lt-dir button");
+    if (!b || !state.ttLine || b.dataset.dir === state.ttLine.direction) return;
+    state.ttLine = { ...state.ttLine, direction: b.dataset.dir };
+    state.departures = null;
+    refreshDepartures();
+  });
+
   // Today's timetable: every train still to come, compact, grouped by hour.
   function renderTimetable(d, now, from) {
     const el = $("tt");
@@ -823,6 +979,7 @@
     renderBoardNotice();
     if (!d) return;
     const now = serverNow();
+    if (d.kind === "line") { renderLineTimetable(d, now); return; }
     const from = d.station ? d.station.name : "";
     const tag = viewTag();
     // Station names are buttons that show that station on the map (not on the timetable tab, which has no map).
@@ -1009,6 +1166,11 @@
     const wasHidden = document.body.classList.contains("no-map");
     document.body.classList.toggle("no-map", mapHidden());
     document.body.classList.toggle("map-only", state.tab === "map");
+    if (state.tab === "map") { if ($("map-head").hidden) { renderMapHead(); enter($("map-head")); requestAnimationFrame(measureMapOverlays); } }
+    else {
+      $("map-head").hidden = true;
+      if (mapView.lineFocus) mapView.setLineFocus(null, { fit: false });
+    }
     if (wasMapOnly !== (state.tab === "map") || (wasHidden && !mapHidden())) fadeIn(document.querySelector(".map-wrap"));
     // The map's box changes size between tabs: fit it again (and catch up on trains if it was hidden).
     requestAnimationFrame(() => {
@@ -1340,6 +1502,7 @@
     $("data-version").textContent = s.static_version ? `Schedule version: ${s.static_version}.` : "";
     if (s.static_loaded && state.stations.length) refreshProfile();
     mapView.setMapStatus(s.map);
+    if (!$("map-head").hidden && state.stations.length) renderMapHead();
     return s.static_loaded;
   }
 
@@ -1389,6 +1552,7 @@
     else { state.station = null; refreshDepartures(); }
     // The board comes first; the map gets its data right after.
     mapView.setStations(stations);
+    if (!$("map-head").hidden) renderMapHead();
     if (lines) mapView.setLines(lines);
     else api("/api/lines").then((g) => mapView.setLines(g)).catch(console.warn);
     // Open the map framed on your commute rather than the whole system.

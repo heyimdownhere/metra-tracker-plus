@@ -1224,6 +1224,88 @@ class Tracker:
         self._trains_cache = (now, result)
         return result
 
+    def line_trains(self, route: str, direction: str | None = None, now: float | None = None, limit: int = 60) -> dict:
+        """Every train on one line still to run today in one direction (running ones first).
+
+        For each: train number, where it starts and ends with times, and for a running
+        train its next stop and delay (Metra's prediction, else the GPS estimate).
+        """
+        s = self.static
+        now = time.time() if now is None else now
+        if not s:
+            return {"route": route, "direction": direction, "trains": []}
+        if route not in s.routes:
+            raise KeyError(route)
+        until = self.day_end(now)
+        rows = []
+        seen: set[tuple[str, date]] = set()
+        for d in s.candidate_service_dates(now):
+            base = s.service_day_start(d)
+            services = s.active_services(d)
+            for trip_id, trip in s.trips.items():
+                if trip[T_ROUTE] != route or trip[T_SERVICE] not in services or (trip_id, d) in seen:
+                    continue
+                span = s.trip_spans.get(trip_id)
+                sts = s.trip_stops.get(trip_id)
+                if not span or not sts:
+                    continue
+                start, end = base + span[0], base + span[1]
+                if start >= until or end < now - 3 * 3600:
+                    continue
+                first, last = sts[0], sts[-1]
+                if direction and self._direction(first[S_STOP], last[S_STOP]) != direction:
+                    continue
+                live = self.realtime_live and self._rt_matches_date(trip_id, d)
+                pred_first = self._predict(trip_id, first[S_SEQ], base) if live else None
+                cancelled = bool(pred_first and pred_first["cancelled"])
+                pred_last = self._predict(trip_id, last[S_SEQ], base) if live else None
+                delay, next_stop, tracking = None, None, False
+                if live:
+                    delay = (pred_last or pred_first or {}).get("delay")
+                gps = self._gps.get(trip_id)
+                if gps and gps.get("service_date") == d and not gps.get("finished") and delay is None:
+                    delay, next_stop, tracking = gps["delay"], gps["next_stop"], True
+                end_est = end + (delay or 0)
+                if end_est < now - 60 and not cancelled:
+                    continue  # already done
+                running = start + min(delay or 0, 0) <= now <= end_est
+                if running and next_stop is None:
+                    # first stop the train hasn't reached yet
+                    for x in sts:
+                        p = self._predict(trip_id, x[S_SEQ], base) if live else None
+                        t = p["time"] if p and p["time"] else base + x[S_DEP] + (delay or 0)
+                        if t >= now:
+                            next_stop = s.stop_name(x[S_STOP])
+                            break
+                if cancelled and end < now:
+                    continue
+                seen.add((trip_id, d))
+                route_info = s.routes.get(route, {})
+                rows.append({
+                    "trip_id": trip_id,
+                    "train": trip[T_SHORT_NAME] or self._running_labels.get(trip_id),
+                    "origin": s.stop_name(first[S_STOP]),
+                    "origin_time": start,
+                    "destination": s.trip_destination(trip_id),
+                    "dest_time": end_est,
+                    "dest_time_scheduled": end,
+                    "delay": delay,
+                    "live": bool(live and (pred_first or pred_last) and not tracking),
+                    "tracking": tracking,
+                    "cancelled": cancelled,
+                    "running": running and not cancelled,
+                    "next_stop": next_stop if running else None,
+                    "direction": self._direction(first[S_STOP], last[S_STOP]),
+                    "color": route_info.get("color", "#888888"),
+                })
+        rows.sort(key=lambda r: (not r["running"], r["origin_time"]))
+        r = s.routes.get(route, {})
+        return {
+            "route": route, "route_short": r.get("short_name", route), "route_name": r.get("long_name", route),
+            "color": r.get("color"), "text_color": r.get("text_color"), "direction": direction,
+            "trains": rows[:limit], "data_as_of": self.data_as_of("tripupdates"), "generated_at": now,
+        }
+
     def _next_stop_delay(self, trip_id: str, now: float) -> tuple[int | None, str | None]:
         s = self.static
         d = s.trip_service_date(trip_id, now)

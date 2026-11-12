@@ -197,6 +197,24 @@ def destinations(station: str = Query(..., min_length=1)):
         raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
 
 
+@app.get("/api/line")
+def line(
+    route: str = Query(..., min_length=1, description="Route id, e.g. UP-N"),
+    direction: str | None = Query(None, description="inbound/to or outbound/from downtown; omit for both"),
+):
+    """Every train on a line still to run today, running ones first."""
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    try:
+        d = normalize_direction(direction)
+    except ValueError:
+        raise HTTPException(400, "direction must be inbound/to or outbound/from (or omitted for both)")
+    try:
+        return _json(tracker.line_trains(route, d))
+    except KeyError as exc:
+        raise HTTPException(404, f"Unknown line {exc.args[0]!r}")
+
+
 @app.get("/api/timetable")
 def timetable(
     station: str = Query(..., min_length=1),
