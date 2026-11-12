@@ -250,13 +250,34 @@
       .format(new Date(serverNow() * 1000));
     return hhmm < sw ? "inbound" : "outbound";
   }
+  // Show one line's timetable (null: back to your station's timetable).
+  function setTtLine(rid) {
+    const dir = state.ttLine ? state.ttLine.direction : defaultDirection();
+    state.ttLine = rid ? { route: rid, direction: dir } : null;
+    state.departures = null;
+    if (state.tab !== "timetable") { $("tab-timetable").click(); return; }
+    applyView();
+    refreshDepartures();
+  }
   $("line-card-open").addEventListener("click", () => {
-    const rid = mapView.lineFocus;
-    if (!rid) return;
-    state.ttLine = { route: rid, direction: defaultDirection() };
-    if (state.tab !== "timetable") $("tab-timetable").click();
-    else { state.departures = null; refreshDepartures(); }
-    updateClear();
+    if (!mapView.lineFocus) return;
+    state.ttLine = null;  // start from the time-of-day direction
+    setTtLine(mapView.lineFocus);
+  });
+  // Timetable tab: a strip of lines on top; "My station" goes back to the station timetable.
+  function renderTtHead() {
+    const focus = state.ttLine ? state.ttLine.route : null;
+    const chip = (id, label, color) => `<button type="button" class="line-chip${focus === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${focus === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
+    $("tt-line-chips").innerHTML = chip(null, "📍 Station", null) + mapRoutes().map((r) => chip(r.id, r.short_name, r.color)).join("");
+    const on = $("tt-line-chips").querySelector(".line-chip.on");
+    if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }
+  $("tt-line-chips").addEventListener("click", (e) => {
+    const b = e.target.closest(".line-chip");
+    if (!b) return;
+    const rid = b.dataset.route || null;
+    if (rid === (state.ttLine ? state.ttLine.route : null)) return;
+    setTtLine(rid);
   });
 
   // ---------- train selection (board <-> map) ----------
@@ -782,7 +803,7 @@
       const to = state.dest ? `&to=${encodeURIComponent(state.dest)}` : "";
       const tab = state.tab;
       const d = tab === "timetable"
-        ? await api(`/api/timetable?station=${encodeURIComponent(state.station)}${to}`)
+        ? await api(`/api/timetable?station=${encodeURIComponent(state.station)}`)
         : await api(`/api/departures?station=${encodeURIComponent(state.station)}${to}${lineQuery()}`);
       if (tab !== state.tab) return;  // switched tabs while loading
       d.tab = tab;
@@ -860,7 +881,7 @@
       .filter(Boolean).join(" · ") || "No more trains today";
     const html = [`<div class="lt-hero" style="--line:${esc(d.color || "")}">
         <div class="lt-name">${chip(d.route_short, d.color, d.text_color)}<b>${esc(d.route_name)}</b></div>
-        <div class="lt-sub">${esc(counts)}</div>
+        <div class="lt-sub">${esc(counts)}${asOf.realtime_updated ? ` · <span title="${esc(dataStatement(asOf, "train"))}">Metra data ${esc(fmtDateTime(asOf.realtime_updated))}</span>` : ""}</div>
       </div>
       <div class="lt-dir" role="group" aria-label="Direction">
         <button type="button" data-dir="inbound" aria-pressed="${d.direction === "inbound"}">Toward downtown</button>
@@ -910,47 +931,60 @@
   }
   $("tt").addEventListener("click", (e) => {
     const b = e.target.closest(".lt-dir button");
-    if (!b || !state.ttLine || b.dataset.dir === state.ttLine.direction) return;
+    if (!b) return;
+    if (!state.ttLine) {
+      if (b.dataset.dir === state.ttStationDir) return;
+      state.ttStationDir = b.dataset.dir;
+      renderBoard();
+      return;
+    }
+    if (b.dataset.dir === state.ttLine.direction) return;
     state.ttLine = { ...state.ttLine, direction: b.dataset.dir };
     state.departures = null;
     refreshDepartures();
   });
 
   // Today's timetable: every train still to come, compact, grouped by hour.
+  // Timetable tab, "Station": every train still to come today from the From station,
+  // one direction at a time (same toggle as a line's timetable).
+  state.ttStationDir = null;
   function renderTimetable(d, now, from) {
     const el = $("tt");
-    const rows = d.departures;
+    showEmpty("");
+    const dir = state.ttStationDir || (state.ttStationDir = defaultDirection());
+    const rows = d.departures.filter((r) => (r.direction || "outbound") === dir);
+    const asOf = d.data_as_of || {};
+    const st = (d.station && state.stationById.get(d.station.id)) || {};
+    const lines = (st.routes || []).map((rid) => mapRoutes().find((x) => x.id === rid)).filter(Boolean);
+    const left = rows.filter((r) => !r.cancelled).length;
+    const counts = left ? `${left} train${left === 1 ? "" : "s"} left today · last ${fmtTime(rows[rows.length - 1].time)}` : "No more trains today";
+    const html = [`<div class="lt-hero" style="--line:${esc((lines[0] && lines[0].color) || "var(--accent)")}">
+        <div class="lt-name">${lines.length <= 2 ? lines.map((r) => chip(r.short_name, r.color, r.text_color)).join("") : ""}<b>${esc(from)}</b></div>
+        <div class="lt-sub">${esc(counts)}${asOf.realtime_updated ? ` · <span title="${esc(dataStatement(asOf, "train"))}">Metra data ${esc(fmtDateTime(asOf.realtime_updated))}</span>` : ""}</div>
+      </div>
+      <div class="lt-dir" role="group" aria-label="Direction">
+        <button type="button" data-dir="inbound" aria-pressed="${dir === "inbound"}">Toward downtown</button>
+        <button type="button" data-dir="outbound" aria-pressed="${dir === "outbound"}">Away from downtown</button>
+      </div>`];
     if (!rows.length) {
-      el.innerHTML = "";
-      showEmpty(d.to ? `No more trains today from ${from} to ${d.to.name}.` : `No more trains today from ${from}.`);
+      html.push(`<p class="muted tt-none">No more trains ${dir === "inbound" ? "toward" : "away from"} downtown from ${esc(from)} today.</p>`);
+      el.innerHTML = html.join("");
       return;
     }
-    showEmpty("");
-    const hourFmt = new Intl.DateTimeFormat([], { hour: "numeric", timeZone: state.tz });
     const next = rows.find((r) => !r.cancelled);
-    let lastHour = null;
-    const html = [];
-    html.push(`<p class="tt-summary">${rows.length} train${rows.length === 1 ? "" : "s"} left today${d.to ? ` to ${esc(d.to.name)}` : ""} · last at ${esc(fmtTime(rows[rows.length - 1].time))}</p>`);
-    html.push('<ol class="tt-list">');
+    html.push('<ol class="lt-list tt-list">');
     for (const r of rows) {
-      const hour = hourFmt.format(new Date(r.time * 1000));
-      if (hour !== lastHour) { html.push(`<li class="tt-hour">${esc(hour)}</li>`); lastHour = hour; }
       const mins = Math.round((r.time - now) / 60);
       const status = r.cancelled ? '<span class="badge cancel">Cancelled</span>'
         : r.added ? '<span class="badge extra">Extra</span>'
-        : (r.live || r.tracking) ? (delayHtml(r.delay, r.tracking) || '<span class="delay ontime">On time</span>')
-        : '<span class="tt-sched">Scheduled</span>';
-      const changed = r.scheduled && Math.abs(r.time - r.scheduled) >= 60;
-      const where = d.to && r.arrival
-        ? `Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)}`
-        : `To ${esc(r.destination || r.route_name)}`;
-      html.push(`<li class="tt-row${r.cancelled ? " cancelled" : ""}${r === next ? " next" : ""}" style="--line:${esc(r.color)}">
-        <span class="tt-time">${bigTime(r.time)}${changed ? `<s class="was">${fmtTime(r.scheduled)}</s>` : ""}</span>
-        <span class="tt-main">
-          <span class="tt-top">${chip(r.route_short, r.color, r.text_color)}${r.train ? `<span class="muted">#${esc(r.train)}</span>` : ""}${status}${r.schedule_change ? '<span class="badge schedchg">Changed</span>' : ""}</span>
-          <span class="tt-where">${where}</span>
-        </span>
-        <span class="tt-mins">${r.cancelled ? "" : r === next || mins < 60 ? (mins <= 0 ? "Now" : untilText(mins)) : ""}</span>
+        : (r.live || r.tracking) ? delayHtml(r.delay, r.tracking) : "";
+      const changed = r.scheduled && fmtTime(r.scheduled) !== fmtTime(r.time);
+      const arr = r.final_arrival && !r.cancelled ? `arrives ${timeChange(r.final_arrival_scheduled, r.final_arrival)}` : "";
+      html.push(`<li class="lt-row${r.cancelled ? " cancelled" : ""}${r === next ? " next" : ""}" data-trip="${esc(r.trip_id)}">
+        <span class="lt-time">${bigTime(r.time)}${changed ? `<s class="was">${fmtTime(r.scheduled)}</s>` : ""}</span>
+        <span class="lt-main"><span>${lines.length > 1 ? chip(r.route_short, r.color, r.text_color) + " " : ""}${esc(r.destination || r.route_name)}${r.train ? ` <span class="muted small">#${esc(r.train)}</span>` : ""}</span>
+          <span class="muted small">${[arr, status].filter(Boolean).join(" · ")}</span></span>
+        <span class="lt-in">${r.cancelled ? "" : mins <= 0 ? "Now" : untilText(mins)}</span>
       </li>`);
     }
     html.push("</ol>");
@@ -964,10 +998,10 @@
     renderBoardInner();
     const d = state.departures;
     if (!d) return;
-    const key = [d.tab, d.station && d.station.id, d.to && d.to.id, d.route, d.direction].join("|");
+    const key = [d.tab, d.station && d.station.id, d.to && d.to.id, d.route, d.direction, d.tab === "timetable" && !d.kind ? state.ttStationDir : ""].join("|");
     if (key !== lastBoardKey) {
       if (lastBoardKey !== null) {
-        staggerIn(d.tab === "timetable" ? $("tt").querySelector(".tt-list") : $("board-list"));
+        staggerIn(d.tab === "timetable" ? $("tt").querySelector(".tt-list, .lt-list") : $("board-list"));
         fadeIn($("board-title"));
       }
       lastBoardKey = key;
@@ -1179,7 +1213,12 @@
       if (wasHidden && state.stations.length) refreshTrains();
     });
     updateClear();
-    const show = view.pickers !== "hide" || pickersOpen;
+    const lineMode = state.tab === "timetable" && !!state.ttLine;
+    document.body.classList.toggle("tt-line-mode", lineMode);
+    document.body.classList.toggle("tt-station-mode", state.tab === "timetable" && !lineMode);
+    if (state.tab === "timetable") { renderTtHead(); if ($("tt-head").hidden) enter($("tt-head")); }
+    else $("tt-head").hidden = true;
+    const show = !lineMode && (state.tab === "timetable" || view.pickers !== "hide" || pickersOpen);
     if (show && $("picker").hidden) enter($("picker")); else if (!show) $("picker").hidden = true;
     const btn = $("change-btn");
     btn.hidden = view.pickers !== "hide";
@@ -1188,6 +1227,12 @@
     renderAlerts();
   }
 
+  $("hide-pickers-btn").addEventListener("click", () => {
+    view.pickers = "hide";
+    pickersOpen = false;
+    localStorage.setItem(VIEW_KEY, JSON.stringify(view));
+    applyView();
+  });
   $("change-btn").addEventListener("click", () => {
     pickersOpen = !pickersOpen;
     applyView();
@@ -1503,6 +1548,7 @@
     if (s.static_loaded && state.stations.length) refreshProfile();
     mapView.setMapStatus(s.map);
     if (!$("map-head").hidden && state.stations.length) renderMapHead();
+    if (!$("tt-head").hidden) renderTtHead();
     return s.static_loaded;
   }
 

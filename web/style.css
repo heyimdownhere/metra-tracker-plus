@@ -779,3 +779,18 @@ body.map-only .map-clear { top: calc(var(--map-head-h, 120px) + 8px); }
 .lt-time { font-weight: 700; font-size: 16px; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .lt-time .ampm { font-size: 11px; font-weight: 600; margin-left: 2px; color: var(--muted); }
 .lt-in { font-weight: 700; font-size: 14px; white-space: nowrap; }
+
+/* "Hide" on the station boxes */
+.hide-pickers svg { width: 16px; height: 16px; }
+/* Timetable tab: line strip on top; a line's timetable needs no station boxes or board title */
+.tt-head { margin: 0 0 6px; }
+.tt-head[hidden] { display: none; }
+.tt-head .line-chips { padding: 4px 1px 8px; }
+body.tt-line-mode .board-head { display: none; }
+/* Timetable "Station": just the From box; the hero replaces the board title */
+body.tt-station-mode .board-head,
+body.tt-station-mode .picker-field:has(#dest-input),
+body.tt-station-mode .hide-pickers { display: none; }
+.lt-row.next { background: color-mix(in srgb, var(--accent) 10%, var(--panel-2)); }
+.lt-time .was { display: block; font-size: 11px; font-weight: 500; color: var(--muted); }
+.lt-name .chip + .chip { margin-left: -4px; }

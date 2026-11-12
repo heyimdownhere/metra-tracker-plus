@@ -65,11 +65,18 @@
         <button type="button" role="tab" id="tab-timetable" data-tab="timetable" aria-selected="false">Timetable</button>
         <button type="button" role="tab" id="tab-map" data-tab="map" aria-selected="false">Map</button>
       </nav>
+      <div class="tt-head" id="tt-head" hidden>
+        <div class="line-chips" id="tt-line-chips" role="tablist" aria-label="Line timetables"></div>
+      </div>
       <div class="picker" id="picker">
         <div class="picker-field">
           <div class="picker-label-row">
             <label for="station-input" class="picker-label">From</label>
             <div class="pick-actions">
+              <button id="hide-pickers-btn" class="home-btn hide-pickers" type="button" title="Hide the station boxes (Change brings them back)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 15 5-5 5 5H7Z"/></svg>
+                <span>Hide</span>
+              </button>
               <button id="home-btn" class="home-btn" type="button" hidden>
                 <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
                 <span id="home-btn-text">Set as home</span>
