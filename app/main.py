@@ -23,6 +23,8 @@ from fastapi.staticfiles import StaticFiles
 
 from .basemap import BaseMap
 from .config import load_settings, parse_switch_time, parse_work_days
+from .cta import CtaTracker
+from .cta_api import make_router as make_cta_router
 from .tracker import AmbiguousStation, Tracker, normalize_direction
 from .user_settings import UserSettings
 
@@ -32,6 +34,11 @@ logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s 
 log = logging.getLogger("metra")
 tracker = Tracker(settings)
 user_settings = UserSettings(settings.config_dir / "settings.json")
+# CTA is kept apart: its own tracker, schedule cache (/config/cta) and settings file.
+cta = CtaTracker(settings.config_dir, settings.cta_api_key, settings.cta_static_url,
+                 check_hours=settings.cta_static_check_hours, enabled=settings.cta_enabled,
+                 history_days=settings.history_days)
+cta_settings = UserSettings(settings.config_dir / "cta-settings.json")
 basemap = BaseMap(settings.config_dir, enabled=settings.map_download, source=settings.map_source,
                   bbox=settings.map_bbox, max_zoom=settings.map_max_zoom, refresh_days=settings.map_refresh_days)
 
@@ -94,7 +101,7 @@ def profile(now: float | None = None) -> dict:
     return out
 
 
-def _commute_leg(p: dict, now: float | None = None) -> dict | None:
+def _commute_leg(p: dict, now: float | None = None, tz=None) -> dict | None:
     """Which trip to show right now.
 
     On a workday with both home and work set: before the switch time it's
@@ -103,7 +110,7 @@ def _commute_leg(p: dict, now: float | None = None) -> dict | None:
     home, work = p["home_station"], p["work_station"]
     if not home:
         return None
-    local = datetime.fromtimestamp(time.time() if now is None else now, tracker.static.tz)
+    local = datetime.fromtimestamp(time.time() if now is None else now, tz or tracker.static.tz)
     if work and work != home and local.weekday() in p["work_days"]:
         if local.strftime("%H:%M") < p["switch_time"]:
             return {"leg": "to_work", "from": home, "to": work}
@@ -122,10 +129,12 @@ async def lifespan(_: FastAPI):
     for warning in settings.warnings:
         log.warning("Config: %s", warning)
     await tracker.start()
+    await cta.start()
     import asyncio
     map_task = asyncio.create_task(_map_loop(), name="map")
     yield
     map_task.cancel()
+    await cta.stop()
     await tracker.stop()
 
 
@@ -453,6 +462,9 @@ def lines():
     data = tracker.lines_geojson()
     version = tracker.static.version if tracker.static else ""
     return JSONResponse(data, headers={"Cache-Control": "public, max-age=300", "X-GTFS-Version": version})
+
+
+app.include_router(make_cta_router(cta, cta_settings, settings, _commute_leg))
 
 
 # ---- self-hosted map ---------------------------------------------------------------

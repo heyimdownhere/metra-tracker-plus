@@ -136,6 +136,10 @@ Everything is optional; with nothing set the app runs schedule-only and asks for
 |---|---|---|
 | `METRA_API_TOKEN` | *(empty)* | Metra GTFS-RT API key. Empty = schedule-only. |
 | `METRA_API_TOKEN_FILE` | *(empty)* | Read the key from a file instead (Docker/compose secrets). The variable wins if both are set. |
+| `CTA_TRAIN_TRACKER_KEY` | *(empty)* | CTA Train Tracker API key, for live 'L' trains. Empty = CTA boards come from the schedule and the CTA map has no trains. |
+| `CTA_TRAIN_TRACKER_KEY_FILE` | *(empty)* | Read the CTA key from a file instead. The variable wins if both are set. |
+| `CTA_ENABLED` | `true` | `false` turns the CTA side off and skips downloading CTA's schedule (~50 MB, checked daily, downloaded only when it changes). |
+| `CTA_STATIC_CHECK_HOURS` | `24` | Hours between checks for a new CTA schedule (1–720). |
 | `HOME_STATION` | *(empty)* | Default home station: an id (`NAPERVILLE`) or a name. Ids are at `/api/stations`. |
 | `HOME_DESTINATION` | *(empty)* | Default "Going to" for the home board (when no work station is set). |
 | `WORK_STATION` | *(empty)* | Work station. On workdays the app opens on home → work before the switch time, work → home after. Can't be the same as home. |
@@ -209,6 +213,29 @@ Example: `curl "http://<your-server-ip>:8080/api/next?station=NAPERVILLE&directi
 | `GET /api/history/alerts?days=30` | Every alert seen. |
 | `GET /api/history/export.csv?days=30` | Raw history as CSV. |
 | `GET /api/docs` | Interactive API docs. |
+
+### CTA (`/api/cta/...`)
+
+The CTA 'L' side is kept apart from Metra: CTA station ids (e.g. `40380` Clark/Lake, listed at `/api/cta/stations`), its own home/work in `/config/cta-settings.json`, and its schedule cache in `/config/cta`. Unlike Metra, Train Tracker is only asked when someone is looking, each answer is reused for 30 s, and the server stops at 80,000 requests a day (CTA's limit is 100,000), falling back to the schedule. The key goes in the request address, as CTA requires; it is blanked out of the logs.
+
+| Endpoint | What it returns |
+|---|---|
+| `/api/cta/arrivals?station=40380[&to=41320][&limit=4]` | Next trains, one group per line and direction (southbound Green trains to Ashland/63rd and Cottage Grove share a group). Live, or from the schedule. With `to`: only trains going there, with an estimated arrival. |
+| `/api/cta/timetable?station=40380` | How often trains come today (AM rush, midday, PM rush, evening, late night), first and last train. |
+| `/api/cta/trains` | Every L train's position, heading and next stop. |
+| `/api/cta/follow?run=409` | One train's remaining stops. |
+| `/api/cta/alerts` | CTA alerts for L lines and stations (bus-only alerts left out). |
+| `/api/cta/lines`, `/api/cta/stations` | Lines with colours and track shapes; stations. |
+| `/api/cta/settings` (GET/PUT), `/api/cta/now` | CTA home/work and the board for right now. |
+| `/api/cta/follow?run=409` → `passed` | Stations the train already left, with the time it was seen there (`tracked`) or estimated from the schedule (`estimated`), and its delays today. |
+| `/api/cta/history/station?station=40380[&days=30]` | How regular each line/direction has been, per day type and hour. |
+| `/api/cta/history/delays[?days=7&route=G]` | Trains CTA flagged as delayed: totals per line and each delay (where, when, how long). |
+| `/api/cta/history/export.csv[?days=30]` | Every recorded departure. |
+| `/api/cta/status` | Schedule version, last live data, requests used today. |
+
+**CTA history** (`/config/cta-history.db`, kept for `HISTORY_DAYS`, needs the CTA key). CTA doesn't say how many minutes late an L train is, and L trains aren't tied to timetable trips, so "on time" for the L means *trains came as often as scheduled*. Every 30 s the server checks train positions (about 2,900 requests a day); when a train moves on from a station, that's a departure, saved with the gap since the previous train in the same line and direction and the scheduled gap at that time. A gap more than twice the scheduled one and at least 5 minutes longer is a **long wait**. Each board group then gets, once there are 5+ days of data, "92% on time · every 7 min (scheduled 6) · longest wait 18 min · 2 delays this week" for that time of day and kind of day. Trains CTA flags as delayed (stopped moving) are logged with where and how long.
+
+CTA data is used under CTA's Developer License Agreement: "Data provided by CTA. Not affiliated with or endorsed by CTA."
 
 ## Development
 

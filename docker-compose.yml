@@ -13,6 +13,8 @@ services:
       - ${APPDATA:-/mnt/user/appdata/next-stop}:/config
     environment:
       METRA_API_TOKEN: ${METRA_API_TOKEN:-}
+      CTA_TRAIN_TRACKER_KEY: ${CTA_TRAIN_TRACKER_KEY:-}
+      CTA_ENABLED: ${CTA_ENABLED:-true}
       TZ: ${TZ:-America/Chicago}
       PORT: ${PORT:-8080}
       HOME_STATION: ${HOME_STATION:-}
