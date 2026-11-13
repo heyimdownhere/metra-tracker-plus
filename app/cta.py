@@ -825,8 +825,8 @@ class CtaTracker:
                     x["arrives"] = x["time"] + g["travel_minutes"] * 60
                 if x["destination"]:
                     counts[x["destination"]] += 1
-            # Stable order (doesn't flip as trains come and go): most trains first, then A-Z.
-            g["destinations"] = sorted(counts, key=lambda h: (-counts[h], h))
+            # A-Z, so the label doesn't flip as trains come and go.
+            g["destinations"] = sorted(counts)
             g["label"] = " · ".join(g["destinations"])
             g["history"] = await self._board_history(station, g["key"], now)
             out.append(g)

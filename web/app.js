@@ -190,8 +190,8 @@
 
   const mapView = MetraMap.create({
     container: $("map"),
-    onStationClick: (id) => selectStation(id, { pan: false }),
-    popupHtml: trainPopup,
+    onStationClick: (id) => (CTA.active() ? CTA.selectStation(id, { pan: false }) : selectStation(id, { pan: false })),
+    popupHtml: (t) => (t.system === "cta" ? CTA.popup(t) : trainPopup(t)),
     onLineFocus: (rid) => {
       mapView.closePopups();
       renderMapHead(rid);
@@ -209,6 +209,7 @@
 
   // ---------- Map tab: header with line chips, and a card for the focused line ----------
   function mapRoutes() {
+    if (CTA.active()) return CTA.routes();
     const routes = ((state.status && state.status.routes) || []).slice();
     return routes.sort((a, b) => String(a.short_name).localeCompare(String(b.short_name)));
   }
@@ -234,7 +235,7 @@
     const r = focus && mapRoutes().find((x) => x.id === focus);
     document.querySelector(".map-wrap").classList.toggle("has-line-card", !!r);
     if (!r) { if (!card.hidden) leave(card); return; }
-    const nStations = state.stations.filter((s) => s.routes.includes(r.id)).length;
+    const nStations = (CTA.active() ? CTA.stations() : state.stations).filter((s) => s.routes.includes(r.id)).length;
     const trains = ((mapView.lastTrains && mapView.lastTrains.trains) || []).filter((t) => t.route_id === r.id);
     const late = trains.filter((t) => t.delay >= 360).length;
     $("line-card-top").innerHTML = `${chip(r.short_name, r.color, r.text_color)}<b>${esc(r.long_name || r.short_name)}</b>`;
@@ -337,6 +338,7 @@
   });
 
   async function refreshTrains() {
+    if (CTA.active()) return CTA.refreshTrains();
     if (mapHidden()) return;  // timetable only: no train positions needed
     let data;
     // Only trains still heading to your "Going to" stop, unless you chose all trains.
@@ -513,12 +515,13 @@
     onSelect: (id) => selectDest(id),
   });
 
-  $("board-swap").addEventListener("click", () => $("swap-btn").click());
+  $("board-swap").addEventListener("click", () => (CTA.active() ? CTA.swap() : $("swap-btn").click()));
 
   // "Clear": drop the Going-to station and any selected train, and show every train.
   // Clear everything: From, Going to, any line view and selected train. The map
   // shows every train; "To home"/"To work" brings the commute back.
   function clearView() {
+    if (CTA.active()) return CTA.clear();
     state.selectedTrip = null;
     state.line = null;
     state.ttLine = null;
@@ -633,6 +636,7 @@
   }
 
   function updateHomeUi() {
+    if (CTA.active()) return;  // the CTA side draws its own Home/Work
     if (state.stations.length) syncMapPlaces();
     const p = state.home;
     const homeBtn = $("home-btn"), workBtn = $("work-btn"), go = $("go-home-btn");
@@ -711,6 +715,7 @@
   }
   // To home / To work: the commute in that direction (or just the station if only one is set).
   function goTrip(kind) {
+    if (CTA.active()) return CTA.goTrip(kind);
     const p = state.home;
     const target = kind === "home" ? p.home_station : p.work_station;
     const other = kind === "home" ? p.work_station : p.home_station;
@@ -812,6 +817,7 @@
   }
 
   async function refreshDepartures() {
+    if (CTA.active()) return;  // cta.js loads CTA's boards
     if (state.tab === "timetable" && state.ttLine) {
       const { route, direction } = state.ttLine;
       let d;
@@ -1033,6 +1039,7 @@
   // (another station, direction, line or tab), so a refresh never flickers.
   let lastBoardKey = null;
   function renderBoard() {
+    if (CTA.active()) return CTA.render();
     renderBoardInner();
     const d = state.departures;
     if (!d) return;
@@ -1232,7 +1239,8 @@
     const id = sheet.trip;
     if (!id) return;
     let d;
-    try { d = await api(`/api/trip?trip_id=${encodeURIComponent(id)}`); } catch (e) {
+    const cta = id.startsWith("cta:");
+    try { d = await api(cta ? CTA.tripPath(id) : `/api/trip?trip_id=${encodeURIComponent(id)}`); if (cta) d = CTA.toTrip(d); } catch (e) {
       if (sheet.firstRender) $("ts-head").innerHTML = '<p class="muted">Couldn\'t load this train.</p>';
       return;
     }
@@ -1267,7 +1275,7 @@
     const last = stops[stops.length - 1];
     const minsTo = (t) => Math.max(0, Math.round((t - now) / 60));
     const inText = (t) => (minsTo(t) < 1 ? "Now" : untilText(minsTo(t)));
-    const status = d.cancelled ? '<span class="badge cancel">Cancelled</span>'
+    const status = d.status_html ? d.status_html : d.cancelled ? '<span class="badge cancel">Cancelled</span>'
       : (d.live || d.tracking) && d.delay != null ? delayHtml(d.delay, d.tracking) : '<span class="muted">Scheduled</span>';
     const cell = (label, value) => `<div><span class="ts-k">${esc(label)}</span><b>${value}</b></div>`;
     let cells;
@@ -1284,7 +1292,7 @@
     $("ts-head").innerHTML = `<div class="ts-title">${chip(d.route_short, d.color, d.text_color)}
         <b id="ts-title">${d.train ? `#${esc(d.train)} ` : ""}to ${esc(d.destination || last.name)}</b>${pill}</div>
       <div class="ts-sum">${cells.join("")}</div>`;
-    const home = state.home || {};
+    const home = (d.cta ? CTA.profile() : state.home) || {};
     const tag = (st) => st.station_id && st.station_id === home.home_station ? '<span class="ts-tag home">Home</span>'
       : st.station_id && st.station_id === home.work_station ? '<span class="ts-tag work">Work</span>' : "";
     // Times on the timeline without AM/PM (the summary above has them), like a printed timetable.
@@ -1298,7 +1306,7 @@
       rows.push(`<li class="ts-st ${cls}"><span class="ts-dot"></span><span class="ts-nm">${esc(st.name)}${tag(st)}</span><span class="ts-t">${t}</span></li>`);
       if (d.running && ni != null && i === ni - 1) {
         const age = d.position_at ? Math.max(0, Math.round(now - d.position_at)) : null;
-        const src = age != null ? `Metra GPS · ${age < 60 ? `${age}s` : `${Math.round(age / 60)} min`} ago` : d.live ? "From Metra's predictions" : "Estimated from the schedule";
+        const src = d.source_note ? d.source_note : age != null ? `Metra GPS · ${age < 60 ? `${age}s` : `${Math.round(age / 60)} min`} ago` : d.live ? "From Metra's predictions" : "Estimated from the schedule";
         rows.push(`<li class="ts-now"><span class="ts-train" aria-hidden="true"></span><span class="ts-nowtxt"><span><b>Now</b> · between ${esc(stops[ni - 1].name)} and ${esc(stops[ni].name)}</span><span class="muted small">${esc(src)}</span></span></li>`);
       }
     });
@@ -1433,7 +1441,8 @@
     const tabsTop = document.querySelector(".tabs").getBoundingClientRect().top + window.scrollY;
     if (window.scrollY > tabsTop) window.scrollTo(0, 0);
     slidePanel(TAB_ORDER.indexOf(state.tab) > TAB_ORDER.indexOf(prevTab) ? "right" : "left");
-    if (reload) refreshDepartures();
+    if (CTA.active()) CTA.tabChanged();
+    else if (reload) refreshDepartures();
   }));
 
   const TAB_ORDER = ["live", "timetable", "map"];
@@ -1486,6 +1495,15 @@
     btn.innerHTML = pickersOpen ? "Done" : btn._icon;
     btn.classList.toggle("icon-only", !pickersOpen);
     btn.setAttribute("aria-expanded", String(show));
+    if (CTA.active()) {
+      // CTA has its own station boxes; Metra's line timetables and "Trains to" chip don't apply.
+      $("picker").hidden = true;
+      $("tt-head").hidden = true;
+      $("map-clear").hidden = true;
+      document.body.classList.remove("tt-line-mode");
+      btn.hidden = false;
+      CTA.render();
+    }
     renderAlerts();
   }
 
@@ -1645,6 +1663,7 @@
   });
 
   async function refreshAlerts() {
+    if (CTA.active()) return;  // cta.js loads CTA's alerts
     let alerts;
     try { alerts = await api("/api/alerts"); } catch (e) { console.warn(e); return; }
     state.alerts = alerts;
@@ -1662,10 +1681,12 @@
     $("bell-btn").hidden = !bell;
     if (!bell) $("bell-panel").hidden = true;
     if (view.alerts === "off") { box.hidden = true; return; }
-    const myLines = new Set();
-    for (const id of [state.station, state.dest, state.home.home_station, state.home.home_dest, state.home.work_station]) {
-      const st = state.stationById.get(id);
-      if (st) st.routes.forEach((r) => myLines.add(r));
+    const myLines = CTA.active() ? CTA.myLines() : new Set();
+    if (!CTA.active()) {
+      for (const id of [state.station, state.dest, state.home.home_station, state.home.home_dest, state.home.work_station]) {
+        const st = state.stationById.get(id);
+        if (st) st.routes.forEach((r) => myLines.add(r));
+      }
     }
     const isMine = (a) => a.routes.some((r) => myLines.has(r.id));
     // Alerts you haven't hidden come first, so a new one leads the banner.
@@ -1714,6 +1735,7 @@
   // match the published timetable (special or modified service, extra trains...).
   function renderBoardNotice() {
     const el = $("board-notice");
+    if (CTA.active()) { el.hidden = true; return; }
     const d = state.departures;
     const routes = new Set(((d && d.departures) || []).map((r) => r.route_id));
     const hits = view.alerts === "off" ? []
@@ -1814,6 +1836,7 @@
     mapView.setMapStatus(s.map);
     if (!$("map-head").hidden && state.stations.length) renderMapHead();
     if (!$("tt-head").hidden) renderTtHead();
+    if (CTA.active()) CTA.updatePill();
     return s.static_loaded;
   }
 
@@ -1823,6 +1846,7 @@
     const wasOnLeg = onLeg();
     const changed = JSON.stringify(p.leg) !== JSON.stringify(state.home.leg);
     state.home = p;
+    if (CTA.active()) return;  // Metra's commute; applied when you switch back
     if (changed && wasOnLeg && p.leg) goToLeg();  // follow the commute only if you were on it
     else updateHomeUi();
   }
@@ -1864,12 +1888,14 @@
     // The board comes first; the map gets its data right after.
     mapView.setStations(stations);
     if (!$("map-head").hidden) renderMapHead();
-    if (lines) mapView.setLines(lines);
-    else api("/api/lines").then((g) => mapView.setLines(g)).catch(console.warn);
+    if (lines) state.linesGeo = lines;
+    else state.linesGeo = await api("/api/lines").catch(() => null);
+    if (state.linesGeo && !CTA.active()) mapView.setLines(state.linesGeo);
     // Open the map framed on your commute rather than the whole system.
-    syncMapPlaces().then(() => mapView.fitPlaces(false));
+    if (!CTA.active()) syncMapPlaces().then(() => mapView.fitPlaces(false));
     refreshTrains();
     refreshAlerts();
+    CTA.start();
 
     // Poll only while the app is on screen: a hidden tab or locked phone
     // uses no data. Coming back refreshes immediately.
@@ -1896,6 +1922,40 @@
     });
   }
 
+  // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
+  CTA.init({
+    api, esc, chip, enter, toast, fmtTime, bigTime, serverNow, mapView, applyView, showEmpty, renderMapHead,
+    tab: () => state.tab,
+    selectedTrip: () => state.selectedTrip,
+    pickersShown: () => state.tab === "timetable" || view.pickers !== "hide" || pickersOpen,
+    setAlerts: (list) => { state.alerts = list; renderAlerts(); },
+    pickTrain: (trip, route) => {
+      if (mapHidden()) return;
+      if (state.selectedTrip === trip) { state.selectedTrip = null; mapView.clearSelection(false); CTA.render(); return; }
+      state.selectedTrip = trip;
+      mapView.selectTrip(trip, route);
+      CTA.render();
+      if (narrow()) deferScroll(() => $("map").scrollIntoView({ behavior: "smooth", block: "center" }));
+    },
+    // Back to Metra: its lines, stations, trains and board again.
+    onMetra: () => {
+      state.selectedTrip = null;
+      mapView.updateTrains({ trains: [] });
+      if (state.stations.length) mapView.setStations(state.stations);
+      if (state.linesGeo) mapView.setLines(state.linesGeo);
+      $("cta-picker").hidden = true;
+      state.departures = null;
+      $("board-list").innerHTML = "";
+      $("tt").innerHTML = "";
+      applyView();
+      renderMapHead();
+      syncMapPlaces();
+      if (state.station && state.stationById.has(state.station)) selectStation(state.station, { pan: false });
+      else refreshDepartures();
+      refreshTrains();
+      refreshAlerts();
+    },
+  });
   applyView();
   boot().catch((e) => { console.error(e); showEmpty("Something went wrong loading the app. Reload to retry."); });
 })();
