@@ -217,7 +217,8 @@
   function renderMapHead(focus = mapView.lineFocus) {
     const routes = mapRoutes();
     const chip = (id, label, color) => `<button type="button" class="line-chip${(focus || null) === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${(focus || null) === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
-    $("line-chips").innerHTML = chip(null, "All", null) + routes.map((r) => chip(r.id, r.short_name, r.color)).join("");
+    $("line-pin").innerHTML = chip(null, "All", null);
+    $("line-chips").innerHTML = routes.map((r) => chip(r.id, r.short_name, r.color)).join("");
     const on = $("line-chips").querySelector(".line-chip.on");
     if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "nearest" });
     renderLineCard(focus);
@@ -236,7 +237,7 @@
     if (card.hidden) enter(card);
     requestAnimationFrame(measureMapOverlays);
   }
-  $("line-chips").addEventListener("click", (e) => {
+  $("map-chip-bar").addEventListener("click", (e) => {
     const b = e.target.closest(".line-chip");
     if (b) mapView.setLineFocus(b.dataset.route || null);
   });
@@ -268,11 +269,12 @@
   function renderTtHead() {
     const focus = state.ttLine ? state.ttLine.route : null;
     const chip = (id, label, color) => `<button type="button" class="line-chip${focus === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${focus === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
-    $("tt-line-chips").innerHTML = chip(null, "📍 Station", null) + mapRoutes().map((r) => chip(r.id, r.short_name, r.color)).join("");
+    $("tt-line-pin").innerHTML = chip(null, "📍 Station", null);
+    $("tt-line-chips").innerHTML = mapRoutes().map((r) => chip(r.id, r.short_name, r.color)).join("");
     const on = $("tt-line-chips").querySelector(".line-chip.on");
     if (on && on.scrollIntoView) on.scrollIntoView({ block: "nearest", inline: "nearest" });
   }
-  $("tt-line-chips").addEventListener("click", (e) => {
+  $("tt-chip-bar").addEventListener("click", (e) => {
     const b = e.target.closest(".line-chip");
     if (!b) return;
     const rid = b.dataset.route || null;
@@ -896,7 +898,7 @@
       : (t.live || t.tracking) && t.delay != null ? delayHtml(t.delay, t.tracking)
       : '<span class="tt-sched">Scheduled</span>';
     if (running.length) {
-      html.push('<h3 class="lt-head"><span class="lt-live"></span>On the way now</h3>');
+      html.push('<h3 class="lt-head"><span class="lt-live"></span>On the way now</h3><div class="lt-cards">');
       for (const t of running) {
         // How far along: time since it (likely) left vs. its scheduled run time.
         const late = Math.max(0, t.delay || 0);
@@ -914,6 +916,7 @@
         </div>`);
       }
     }
+    if (running.length) html.push("</div>");
     if (later.length) {
       html.push(`<h3 class="lt-head">${running.length ? "Later today" : "Still to come today"}</h3><ol class="lt-list">`);
       for (const t of later) {
@@ -957,10 +960,10 @@
     const st = (d.station && state.stationById.get(d.station.id)) || {};
     const lines = (st.routes || []).map((rid) => mapRoutes().find((x) => x.id === rid)).filter(Boolean);
     const left = rows.filter((r) => !r.cancelled).length;
-    const counts = left ? `${left} train${left === 1 ? "" : "s"} left today · last ${fmtTime(rows[rows.length - 1].time)}` : "No more trains today";
+    const arriving = rows.length && rows.every((r) => r.arriving);
+    const counts = left ? `${left} train${left === 1 ? "" : "s"} ${arriving ? "arriving" : "left"} today · last ${fmtTime(rows[rows.length - 1].time)}` : "No more trains today";
     const html = [`<div class="lt-hero" style="--line:${esc((lines[0] && lines[0].color) || "var(--accent)")}">
-        <div class="lt-name">${lines.length <= 2 ? lines.map((r) => chip(r.short_name, r.color, r.text_color)).join("") : ""}<b>${esc(from)}</b></div>
-        <div class="lt-sub">${esc(counts)}${asOf.realtime_updated ? ` · <span title="${esc(dataStatement(asOf, "train"))}">Metra data ${esc(fmtDateTime(asOf.realtime_updated))}</span>` : ""}</div>
+        <div class="lt-sub lt-sub-only">${lines.length <= 2 ? lines.map((r) => chip(r.short_name, r.color, r.text_color)).join("") + " " : ""}${esc(counts)}${asOf.realtime_updated ? ` · <span title="${esc(dataStatement(asOf, "train"))}">Metra data ${esc(fmtDateTime(asOf.realtime_updated))}</span>` : ""}</div>
       </div>
       <div class="lt-dir" role="group" aria-label="Direction">
         <button type="button" data-dir="inbound" aria-pressed="${dir === "inbound"}">Toward downtown</button>
@@ -979,10 +982,11 @@
         : r.added ? '<span class="badge extra">Extra</span>'
         : (r.live || r.tracking) ? delayHtml(r.delay, r.tracking) : "";
       const changed = r.scheduled && fmtTime(r.scheduled) !== fmtTime(r.time);
-      const arr = r.final_arrival && !r.cancelled ? `arrives ${timeChange(r.final_arrival_scheduled, r.final_arrival)}` : "";
+      const arr = r.arriving ? (r.origin_time ? `left ${fmtTime(r.origin_time)}` : "")
+        : r.final_arrival && !r.cancelled ? `arrives ${timeChange(r.final_arrival_scheduled, r.final_arrival)}` : "";
       html.push(`<li class="lt-row${r.cancelled ? " cancelled" : ""}${r === next ? " next" : ""}" data-trip="${esc(r.trip_id)}">
         <span class="lt-time">${bigTime(r.time)}${changed ? `<s class="was">${fmtTime(r.scheduled)}</s>` : ""}</span>
-        <span class="lt-main"><span>${lines.length > 1 ? chip(r.route_short, r.color, r.text_color) + " " : ""}${esc(r.destination || r.route_name)}${r.train ? ` <span class="muted small">#${esc(r.train)}</span>` : ""}</span>
+        <span class="lt-main"><span>${lines.length > 1 ? chip(r.route_short, r.color, r.text_color) + " " : ""}${r.arriving ? `${arriving ? "" : '<span class="lt-arrtag">Arriving</span> '}From ${esc(r.origin || "")}` : esc(r.destination || r.route_name)}${r.train ? ` <span class="muted small">#${esc(r.train)}</span>` : ""}</span>
           <span class="muted small">${[arr, status].filter(Boolean).join(" · ")}</span></span>
         <span class="lt-in">${r.cancelled ? "" : mins <= 0 ? "Now" : untilText(mins)}</span>
       </li>`);
@@ -1001,8 +1005,11 @@
     const key = [d.tab, d.station && d.station.id, d.to && d.to.id, d.route, d.direction, d.tab === "timetable" && !d.kind ? state.ttStationDir : ""].join("|");
     if (key !== lastBoardKey) {
       if (lastBoardKey !== null) {
-        staggerIn(d.tab === "timetable" ? $("tt").querySelector(".tt-list, .lt-list") : $("board-list"));
+        if (d.tab === "timetable") $("tt").querySelectorAll(".lt-cards, .lt-list, .tt-list").forEach(staggerIn);
+        else staggerIn($("board-list"));
         fadeIn($("board-title"));
+        const hero = $("tt").querySelector(".lt-hero");
+        if (hero && d.tab === "timetable") fadeIn(hero);
       }
       lastBoardKey = key;
     }
@@ -1026,7 +1033,9 @@
     };
     $("board-title").innerHTML = (d.to ? `${stn(d.station && d.station.id, from)} → ${stn(d.to.id, d.to.name)}`
       : stn(d.station && d.station.id, from) + (d.route ? lineTitle() : ""))
-      + (tag && !d.route ? `<span class="home-tag">${tag}</span>` : "");
+      ;
+    $("board-tag").textContent = tag && !d.route ? tag : "";
+    $("board-tag").hidden = !(tag && !d.route);
     const asOf = d.data_as_of || {};
     // License: when Metra last updated the data (here) + the disclaimer (small line below).
     $("board-updated").textContent = asOf.realtime_updated ? `Metra data ${fmtDateTime(asOf.realtime_updated)}`
@@ -1056,7 +1065,7 @@
       const minsHtml = r.cancelled ? "<b>—</b>" : mins === 0 ? "<b>Now</b>"
         : mins < 60 ? `<b>${mins}</b><span>min</span>`
         : `<b>${Math.floor(mins / 60)}<small>hr</small></b><span>${mins % 60 ? `${mins % 60} min` : "&nbsp;"}</span>`;
-      const changed = r.scheduled && Math.abs(r.time - r.scheduled) >= 60;
+      const changed = r.scheduled && fmtTime(r.scheduled) !== fmtTime(r.time);
       const badge = r.cancelled ? '<span class="badge cancel">Cancelled</span>'
         : r.live ? '<span class="badge live">Live</span>'
         : r.tracking ? '<span class="badge tracking" title="Metra sent no prediction for this train; delay estimated from its GPS position">Tracking</span>'
@@ -1072,9 +1081,12 @@
       const sel = r.trip_id && r.trip_id === state.selectedTrip;
       return `<li class="dep${r.cancelled ? " cancelled" : ""}${sel ? " selected" : ""}" style="--line:${esc(r.color)}"${r.trip_id ? ` data-trip="${esc(r.trip_id)}" data-route="${esc(r.route_id || "")}" tabindex="0" role="button" aria-pressed="${sel}" title="Show this train on the map"` : ""}>
         <div class="timecol"><div class="time">${bigTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
-        <div class="main"><div class="dest" title="${esc(r.destination)}">${esc(r.destination || r.route_name)}</div>
+        ${r.arrival && d.to && r.destination === d.to.name
+          ? `<div class="main"><div class="dest arr-head"${r.arrival_scheduled && fmtTime(r.arrival_scheduled) !== fmtTime(r.arrival) ? ` title="Scheduled ${esc(fmtTime(r.arrival_scheduled))}"` : ""}>Arrives <b>${fmtTime(r.arrival)}</b> <span class="trip">· ${Math.round((r.arrival - r.time) / 60)} min</span></div>
+        <div class="meta">${meta}</div>`
+          : `<div class="main"><div class="dest" title="${esc(r.destination)}">${esc(r.destination || r.route_name)}</div>
         <div class="meta">${meta}</div>
-        ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)} · ${Math.round((r.arrival - r.time) / 60)} min trip</div>` : ""}
+        ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)} · ${Math.round((r.arrival - r.time) / 60)} min</div>` : ""}`}
         ${finalHtml(r, d)}
         ${historyHtml(r.history)}
         ${r.delay_reason ? `<div class="reason" title="${esc(r.delay_reason)}">${esc(r.delay_reason)}</div>`
@@ -1106,7 +1118,7 @@
       ? ` data-pick="${esc(r.trip_id || "")}" data-route="${esc(r.route_id || "")}" data-dir="${esc(r.direction || "")}" title="All ${esc(r.route_short)} trains this way"` : "");
     const html = [...groups.values()].map((rs) => {
       const r = rs[0];
-      const changed = r.scheduled && Math.abs(r.time - r.scheduled) >= 60;
+      const changed = r.scheduled && fmtTime(r.scheduled) !== fmtTime(r.time);
       const badge = r.cancelled ? '<span class="badge cancel">Cancelled</span>'
         : r.live ? '<span class="badge live">Live</span>'
         : r.tracking ? '<span class="badge tracking">Tracking</span>'
@@ -1290,7 +1302,10 @@
     const mapSt = s.map || {};
     $("settings-about").innerHTML = kv([
       ["Realtime", s.mode === "schedule-only" ? "Off (no API key)" : s.realtime_live ? `Live (${Math.round(s.realtime_age || 0)}s old)` : "Unavailable right now"],
-      ["Schedule", s.static_version || null],
+      ["Schedule", s.static_version ? `Published ${(() => {
+        const m = String(s.static_version).match(/^(\d+)\/(\d+)\/(\d+)/);
+        return m ? new Date(2000 + +m[3], m[1] - 1, +m[2]).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : s.static_version;
+      })()}` : null],
       ["Map", {
         ready: `Stored on the server (${Math.round((mapSt.size || 0) / 1e6)} MB)`,
         downloading: "The server is downloading it",
