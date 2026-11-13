@@ -113,6 +113,33 @@ def _read_token(warnings: list[str]) -> str | None:
         return None
 
 
+def _read_cta_key(warnings: list[str]) -> str | None:
+    """CTA_TRAIN_TRACKER_KEY, or the contents of the file named by CTA_TRAIN_TRACKER_KEY_FILE."""
+    key = _str_env("CTA_TRAIN_TRACKER_KEY")
+    if key:
+        return key
+    path = _str_env("CTA_TRAIN_TRACKER_KEY_FILE")
+    if not path:
+        return None
+    try:
+        return Path(path).read_text().strip() or None
+    except OSError as exc:
+        warnings.append(f"CTA_TRAIN_TRACKER_KEY_FILE={path!r} could not be read ({exc}); CTA uses the schedule only")
+        return None
+
+
+def _bool_env(name: str, default: bool, warnings: list[str]) -> bool:
+    raw = (_str_env(name) or "").lower()
+    if not raw:
+        return default
+    if raw in ("true", "1", "yes", "on"):
+        return True
+    if raw in ("false", "0", "no", "off"):
+        return False
+    warnings.append(f"{name}={raw!r} should be true or false; using {'true' if default else 'false'}")
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     api_token: str | None
@@ -137,6 +164,10 @@ class Settings:
     map_max_zoom: int = 15
     map_bbox: tuple[float, float, float, float] = (-88.75, 41.30, -87.40, 42.70)
     map_refresh_days: int = 30
+    cta_enabled: bool = True
+    cta_api_key: str | None = None
+    cta_static_url: str = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"
+    cta_static_check_hours: int = 24
     warnings: tuple[str, ...] = field(default=(), compare=False)
 
     @property
@@ -163,9 +194,17 @@ class Settings:
             f"  COMMUTE_SWITCH_TIME   {self.commute_switch_time}",
             f"  WORK_DAYS             {','.join(DAY_NAMES[d] for d in self.work_days) or '(none)'}",
             f"  MAP_DOWNLOAD          {'on' if self.map_download else 'off'} (zoom 0-{self.map_max_zoom}, refresh every {self.map_refresh_days} days)",
+            f"  CTA_ENABLED           {'on' if self.cta_enabled else 'off'}",
+            f"  CTA_TRAIN_TRACKER_KEY {_mask(self.cta_api_key, 'not set (CTA schedule only)')}",
             f"  LOG_LEVEL             {self.log_level}",
         ]
         return "Settings:\n" + "\n".join(lines)
+
+
+def _mask(secret: str | None, unset: str) -> str:
+    if not secret:
+        return unset
+    return f"set ({len(secret)} chars, ends …{secret[-4:]})" if len(secret) > 8 else "set"
 
 
 def load_settings() -> Settings:
@@ -225,5 +264,10 @@ def load_settings() -> Settings:
         map_max_zoom=_int_env("MAP_MAX_ZOOM", 15, 8, 15, warnings),
         map_bbox=map_bbox,
         map_refresh_days=_int_env("MAP_REFRESH_DAYS", 30, 0, 3650, warnings),
+        cta_enabled=_bool_env("CTA_ENABLED", True, warnings),
+        cta_api_key=_read_cta_key(warnings),
+        cta_static_url=_str_env("CTA_STATIC_URL", "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"),
+        # How often to ask CTA whether its schedule changed (a small request unless it did).
+        cta_static_check_hours=_int_env("CTA_STATIC_CHECK_HOURS", 24, 1, 24 * 30, warnings),
         warnings=tuple(warnings),
     )

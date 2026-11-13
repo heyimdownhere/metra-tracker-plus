@@ -1,0 +1,330 @@
+"""CTA 'L' tests: a tiny synthetic CTA schedule and a fake Train Tracker."""
+
+from __future__ import annotations
+
+import asyncio
+import io
+import json
+import logging
+import zipfile
+from datetime import datetime
+from pathlib import Path
+
+import httpx
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from app import cta as cta_mod
+from app.config import Settings
+from app.cta import TZ, CtaTracker, group_key, parse_cta_zip, route_id
+from app.cta_api import make_router
+from app.main import _commute_leg
+from app.user_settings import UserSettings
+
+MON_0755 = datetime(2026, 11, 9, 7, 55, tzinfo=TZ).timestamp()   # a Monday
+TUE_0020 = datetime(2026, 11, 10, 0, 20, tzinfo=TZ).timestamp()
+
+# Stations 4xxxx, platforms 3xxxx (as CTA's file has them). Green trips run one
+# way (direction North/South); the Brown trip is a round trip through the Loop
+# whose sign changes from "Loop" to "Kimball". Route 22 is a bus (ignored).
+FILES = {
+    "agency.txt": "agency_id,agency_name,agency_url,agency_timezone\nCTA,CTA,http://x,America/Chicago\n",
+    "routes.txt": "route_id,route_short_name,route_long_name,route_type,route_color,route_text_color\n"
+                  "G,,Green Line,1,009b3a,ffffff\nBrn,,Brown Line,1,62361b,ffffff\n22,22,Clark,3,565a5c,ffffff\n",
+    "stops.txt": "stop_id,stop_name,stop_lat,stop_lon,location_type,parent_station\n"
+                 "40100,Clark/Lake,41.885,-87.631,1,\n30100,Clark/Lake (Inner),41.885,-87.631,0,40100\n"
+                 "30101,Clark/Lake (Outer),41.885,-87.631,0,40100\n"
+                 "40200,Roosevelt,41.867,-87.626,1,\n30200,Roosevelt,41.867,-87.626,0,40200\n"
+                 "40300,Ashland/63rd,41.778,-87.663,1,\n30300,Ashland/63rd,41.778,-87.663,0,40300\n"
+                 "40400,Cottage Grove,41.780,-87.605,1,\n30400,Cottage Grove,41.780,-87.605,0,40400\n"
+                 "40500,Belmont,41.939,-87.653,1,\n30500,Belmont,41.939,-87.653,0,40500\n"
+                 "40600,Kimball,41.967,-87.713,1,\n30600,Kimball,41.967,-87.713,0,40600\n"
+                 "40700,Merchandise Mart,41.888,-87.633,1,\n30700,Merchandise Mart,41.888,-87.633,0,40700\n"
+                 "1500,Clark & Lake (bus),41.885,-87.631,0,\n",
+    "calendar.txt": "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\n"
+                    "WK,1,1,1,1,1,0,0,20261101,20261130\n",
+    "calendar_dates.txt": "service_id,date,exception_type\nWK,20261126,2\n",
+    "trips.txt": "route_id,service_id,trip_id,direction_id,block_id,shape_id,direction,wheelchair_accessible,schd_trip_id\n"
+                 "G,WK,g1,0,1,SG,South,1,g1\nG,WK,g2,0,1,SG,South,1,g2\nG,WK,g3,1,1,SG,North,1,g3\n"
+                 "G,WK,g4,0,1,SG,South,1,g4\nBrn,WK,b1,0,1,SB,0,1,b1\n22,WK,bus1,0,1,,North,1,bus1\n",
+    "stop_times.txt": "trip_id,arrival_time,departure_time,stop_id,stop_sequence,stop_headsign,pickup_type,shape_dist_traveled\n"
+                      "g1,08:00:00,08:00:00,30100,1,Ashland/63rd,0,0\n"
+                      "g1,08:05:00,08:05:00,30200,2,Ashland/63rd,0,1\n"
+                      "g1,08:20:00,08:20:00,30300,3,,0,2\n"
+                      "g2,08:04:00,08:04:00,30100,1,Cottage Grove,0,0\n"
+                      "g2,08:09:00,08:09:00,30200,2,Cottage Grove,1,1\n"
+                      "g2,08:25:00,08:25:00,30400,3,,0,2\n"
+                      "g3,08:10:00,08:10:00,30200,1,Harlem/Lake,0,0\n"
+                      "g3,08:15:00,08:15:00,30101,2,,0,1\n"
+                      "g4,24:30:00,24:30:00,30100,1,Ashland/63rd,0,0\n"
+                      "g4,24:50:00,24:50:00,30300,2,,0,1\n"
+                      "b1,07:30:00,07:30:00,30600,1,Loop,0,0\n"
+                      "b1,07:40:00,07:40:00,30500,2,Loop,0,1\n"
+                      "b1,07:55:00,07:55:00,30700,3,Loop,0,2\n"
+                      "b1,08:00:00,08:00:00,30101,4,Kimball,0,3\n"
+                      "b1,08:02:00,08:02:00,30700,5,Kimball,0,4\n"
+                      "b1,08:15:00,08:15:00,30500,6,Kimball,0,5\n"
+                      "b1,08:25:00,08:25:00,30600,7,,0,6\n"
+                      "bus1,08:00:00,08:00:00,1500,1,North,0,0\n",
+    "shapes.txt": "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence,shape_dist_traveled\n"
+                  "SG,41.885,-87.631,1,0\nSG,41.867,-87.626,2,1\nSG,41.778,-87.663,3,2\n"
+                  "SB,41.967,-87.713,1,0\nSB,41.939,-87.653,2,1\nSB,41.885,-87.631,3,2\n",
+}
+
+
+def _zip_bytes() -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        for name, body in FILES.items():
+            zf.writestr(name, body)
+    return buf.getvalue()
+
+
+@pytest.fixture()
+def schedule(tmp_path: Path):
+    zp = tmp_path / "cta.zip"
+    zp.write_bytes(_zip_bytes())
+    return parse_cta_zip(zp, "v1")
+
+
+def _tracker(tmp_path, schedule, handler=None, key="k") -> CtaTracker:
+    t = CtaTracker(tmp_path, key, "https://cta.example/google_transit.zip")
+    t.schedule = schedule
+    t._client = httpx.AsyncClient(transport=httpx.MockTransport(handler or (lambda r: httpx.Response(500))))
+    return t
+
+
+def _eta(rt, dest, trdr, arr, rn, stpde="Service at Inner Loop platform", **flags):
+    return {"staId": "40100", "stpDe": stpde, "rn": rn, "rt": rt, "destNm": dest, "trDr": trdr,
+            "arrT": arr, "isApp": flags.get("isApp", "0"), "isSch": flags.get("isSch", "0"),
+            "isDly": flags.get("isDly", "0"), "isFlt": "0"}
+
+
+LIVE = {"ctatt": {"tmst": "2026-11-09T07:55:00", "errCd": "0", "errNm": None, "eta": [
+    _eta("G", "Cottage Grove", "5", "2026-11-09T07:58:00", "006"),
+    _eta("G", "Ashland/63rd", "5", "2026-11-09T07:56:00", "605", isApp="1"),
+    _eta("G", "Ashland/63rd", "5", "2026-11-09T08:10:00", "607"),
+    _eta("Brn", "Kimball", "1", "2026-11-09T08:01:00", "404", stpde="Service at Outer Loop platform"),
+]}}
+
+
+def run(coro):
+    return asyncio.run(coro)
+
+
+# ---- schedule -------------------------------------------------------------------------
+def test_parses_only_the_L(schedule):
+    assert set(schedule.lines) == {"G", "Brn"}
+    assert schedule.lines["G"]["color"] == "#009b3a" and schedule.lines["Brn"]["short_name"] == "Brown"
+    assert set(schedule.stations) == {"40100", "40200", "40300", "40400", "40500", "40600", "40700"}
+    assert schedule.stations["40100"]["routes"] == ["Brn", "G"]
+    assert schedule.shapes["G"][0][0] == [-87.631, 41.885]
+
+
+def test_groups_green_by_direction_and_loop_lines_by_destination(schedule):
+    # Both southbound Green branches share one group; the Brown round trip is
+    # "Loop" until it reaches the Loop, then "Kimball".
+    assert set(schedule.deps["40100"]) == {"G:5", "Brn:Kimball"}
+    assert set(schedule.deps["40500"]) == {"Brn:Loop", "Brn:Kimball"}
+    heads = {h for _, h in schedule.deps["40100"]["G:5"]["WK"]}
+    assert heads == {"Ashland/63rd", "Cottage Grove"}
+    # Last stops and no-pickup stops aren't departures.
+    assert "G:5" not in schedule.deps.get("40300", {})
+    assert [s for s, _ in schedule.deps["40200"]["G:5"]["WK"]] == [8 * 3600 + 5 * 60]
+
+
+def test_reach_stops_where_a_round_trip_comes_back(schedule):
+    assert schedule.reach[("40500", "Brn:Loop")]["40100"] == 20           # Belmont -> Clark/Lake
+    assert "40600" not in schedule.reach[("40500", "Brn:Loop")]           # not Kimball the long way round
+    assert schedule.reach[("40100", "Brn:Kimball")]["40500"] == 15
+    assert set(schedule.reach[("40100", "G:5")]) == {"40200", "40300", "40400"}
+
+
+def test_group_key_and_route_ids():
+    assert group_key("G", "5", "Cottage Grove") == group_key("G", "5", "Ashland/63rd") == "G:5"
+    assert group_key("Brn", "1", "Kimball") == "Brn:Kimball"
+    assert route_id("brn") == route_id("Brown Line") == route_id("Brn") == "Brn"
+    assert route_id("Bus 22") is None
+
+
+def test_cache_roundtrip(tmp_path, schedule):
+    t = CtaTracker(tmp_path, None, "")
+    t.cache.save(schedule)
+    again = t.cache.load()
+    assert again.deps == schedule.deps and again.active_services(datetime(2026, 11, 9).date())
+
+
+# ---- boards ---------------------------------------------------------------------------
+def test_live_arrivals_merge_green_branches(tmp_path, schedule):
+    seen = []
+
+    def handler(req: httpx.Request):
+        seen.append(req.url)
+        return httpx.Response(200, json=LIVE)
+
+    t = _tracker(tmp_path, schedule, handler)
+    d = run(t.arrivals("40100", now=MON_0755))
+    assert d["source"] == "live" and d["credit"].startswith("Data provided by CTA")
+    green, brown = d["groups"]
+    assert green["key"] == "G:5" and [x["run"] for x in green["trains"]] == ["605", "006", "607"]
+    assert green["label"] == "Ashland/63rd · Cottage Grove"   # most trains first, stable
+    assert green["platform"] == "Inner Loop" and green["trains"][0]["due"]
+    assert brown["key"] == "Brn:Kimball" and brown["platform"] == "Outer Loop" and brown["trains"][0]["minutes"] == 6
+    # A second request within 30 s reuses the answer.
+    run(t.arrivals("40100", now=MON_0755))
+    assert len(seen) == 1 and seen[0].params["mapid"] == "40100" and seen[0].params["key"] == "k"
+
+
+def test_destination_filter_and_arrival_estimate(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=LIVE))
+    d = run(t.arrivals("40100", to="40500", now=MON_0755))
+    assert [g["key"] for g in d["groups"]] == ["Brn:Kimball"]
+    x = d["groups"][0]["trains"][0]
+    assert d["groups"][0]["travel_minutes"] == 15 and x["arrives"] == x["time"] + 15 * 60
+
+
+def test_schedule_board_without_a_key(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, key=None)
+    d = run(t.arrivals("40100", now=MON_0755))
+    assert d["source"] == "schedule" and d["error"] is None
+    g = {x["key"]: x for x in d["groups"]}
+    assert [x["destination"] for x in g["G:5"]["trains"]] == ["Ashland/63rd", "Cottage Grove"]
+    assert g["G:5"]["trains"][0]["minutes"] == 5 and not g["G:5"]["trains"][0]["live"]
+
+
+def test_falls_back_to_schedule_when_train_tracker_errors(tmp_path, schedule):
+    bad = {"ctatt": {"tmst": "2026-11-09T07:55:00", "errCd": "500", "errNm": "Invalid API key"}}
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=bad))
+    d = run(t.arrivals("40100", now=MON_0755))
+    assert d["source"] == "schedule" and "Invalid API key" in d["error"] and d["groups"]
+    assert t.status()["live_error"] == d["error"]
+
+
+def test_after_midnight_trains_belong_to_yesterday(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, key=None)
+    d = run(t.arrivals("40100", now=TUE_0020))
+    g = {x["key"]: x for x in d["groups"]}
+    assert g["G:5"]["trains"][0]["minutes"] == 10  # Monday's 24:30 train
+
+
+def test_daily_budget_falls_back_to_schedule(tmp_path, schedule, monkeypatch):
+    monkeypatch.setattr(cta_mod, "DAILY_BUDGET", 0)
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=LIVE))
+    d = run(t.arrivals("40100", now=MON_0755))
+    assert d["source"] == "schedule" and "budget" in d["error"]
+
+
+def test_timetable_frequency_and_no_service_gaps(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, key=None)
+    d = t.timetable("40100", now=MON_0755)
+    g = {x["key"]: x for x in d["groups"]}["G:5"]
+    am = {p["key"]: p for p in g["periods"]}
+    assert am["am_rush"]["min"] == am["am_rush"]["max"] == 4
+    assert am["midday"]["min"] is None  # the 08:04 -> 24:30 gap is "no service", not a wait
+    assert g["label"] == "Ashland/63rd · Cottage Grove" and not g["all_night"]
+    assert g["first"] == datetime(2026, 11, 9, 8, 0, tzinfo=TZ).timestamp()
+    assert g["last"] == datetime(2026, 11, 10, 0, 30, tzinfo=TZ).timestamp()
+
+
+# ---- map, follow, alerts ------------------------------------------------------------------
+def test_positions_accept_a_single_train_object(tmp_path, schedule):
+    body = {"ctatt": {"tmst": "2026-11-09T07:55:00", "errCd": "0", "route": [
+        {"@name": "g", "train": {"rn": "605", "destNm": "Ashland/63rd", "lat": "41.88", "lon": "-87.63", "heading": "180",
+                                 "isApp": "0", "isDly": "0", "arrT": "2026-11-09T07:56:00"}},
+        {"@name": "brn", "train": [{"rn": "404", "destNm": "Kimball", "lat": "41.9", "lon": "-87.64", "heading": "0"},
+                                   {"rn": "405", "destNm": "Loop", "lat": "0", "lon": "0"}]},
+        {"@name": "y"},
+    ]}}
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=body))
+    d = run(t.trains())
+    assert [(x["route_id"], x["run"]) for x in d["trains"]] == [("G", "605"), ("Brn", "404")]
+    assert d["trains"][0]["bearing"] == 180 and d["trains"][0]["color"] == "#009b3a"
+
+
+def test_follow_unknown_train_is_a_key_error(tmp_path, schedule):
+    body = {"ctatt": {"tmst": "2026-11-09T07:55:00", "errCd": "502", "errNm": "No trains"}}
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=body))
+    with pytest.raises(KeyError):
+        run(t.follow("999"))
+    with pytest.raises(KeyError):
+        run(t.follow("abc"))
+
+
+def test_alerts_keep_L_lines_and_stations_only(tmp_path, schedule):
+    body = {"CTAAlerts": {"Alert": [
+        {"AlertId": "1", "Headline": "Bus reroute", "SeverityScore": "37",
+         "ImpactedService": {"Service": {"ServiceType": "B", "ServiceId": "22"}}},
+        {"AlertId": "2", "Headline": "Elevator out", "SeverityScore": "5", "MajorAlert": "0",
+         "ImpactedService": {"Service": [{"ServiceType": "T", "ServiceId": "40100"}, {"ServiceType": "R", "ServiceId": "Brn"}]},
+         "AlertURL": {"#cdata-section": "http://x/2"}},
+        {"AlertId": "3", "Headline": "Green delays", "SeverityScore": "40",
+         "ImpactedService": {"Service": [{"ServiceType": "R", "ServiceId": "G"}]}},
+    ]}}
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=body))
+    d = run(t.alerts())
+    assert [a["id"] for a in d] == ["3", "2"]
+    assert d[1]["stations"] == ["40100"] and d[1]["routes"] == ["Brn"] and d[1]["url"] == "http://x/2"
+
+
+def test_key_never_reaches_the_log(caplog):
+    with caplog.at_level(logging.INFO, logger="httpx"):
+        logging.getLogger("httpx").info('HTTP Request: GET %s "200"',
+                                        "https://lapi.transitchicago.com/api/1.0/ttarrivals.aspx?mapid=1&key=SECRETKEY99&outputType=JSON")
+    assert "SECRETKEY99" not in caplog.text and "key=***" in caplog.text
+
+
+# ---- schedule download -------------------------------------------------------------------
+def test_download_then_unchanged_check_is_one_small_request(tmp_path):
+    calls = []
+
+    def handler(req: httpx.Request):
+        calls.append(dict(req.headers))
+        if req.headers.get("if-none-match") == '"v1"':
+            return httpx.Response(304)
+        return httpx.Response(200, content=_zip_bytes(), headers={"ETag": '"v1"', "Last-Modified": "Mon, 02 Nov 2026 10:00:00 GMT"})
+
+    t = CtaTracker(tmp_path, None, "https://cta.example/google_transit.zip")
+    t._client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    assert run(t.refresh_static()) is True and t.schedule.version == "Mon, 02 Nov 2026 10:00:00 GMT"
+    assert run(t.refresh_static()) is False and calls[1]["if-none-match"] == '"v1"'
+    assert (tmp_path / "cta" / "schedule.pickle").exists() and not (tmp_path / "cta" / "download.zip").exists()
+    # A fresh start loads the cached schedule.
+    assert CtaTracker(tmp_path, None, "").cache.load().version == t.schedule.version
+
+
+def test_broken_download_keeps_the_current_schedule(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, content=b"not a zip"))
+    assert run(t.refresh_static(force=True)) is False
+    assert t.schedule is schedule and "couldn't be read" in t.static_error
+
+
+# ---- API: separate settings ----------------------------------------------------------------
+@pytest.fixture()
+def api(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, key=None)
+    settings = Settings(api_token=None, config_dir=tmp_path, static_url="", published_url="", realtime_base="",
+                        realtime_interval=30, static_check_interval=300, port=8080)
+    app = FastAPI()
+    app.include_router(make_router(t, UserSettings(tmp_path / "cta-settings.json"), settings, _commute_leg))
+    return TestClient(app), tmp_path
+
+
+def test_cta_settings_are_saved_apart_from_metra(api):
+    c, tmp = api
+    r = c.put("/api/cta/settings", json={"home_station": "40500", "work_station": "40100"})
+    assert r.status_code == 200 and r.json()["home_station"] == "40500"
+    assert json.loads((tmp / "cta-settings.json").read_text())["work_station"] == "40100"
+    assert not (tmp / "settings.json").exists()
+    assert c.put("/api/cta/settings", json={"home_station": "EVANSTON"}).status_code == 400   # a Metra id
+    assert c.put("/api/cta/settings", json={"work_station": "40500"}).status_code == 400     # same as home
+
+
+def test_api_endpoints(api):
+    c, _ = api
+    assert c.get("/api/cta/arrivals", params={"station": "nope"}).status_code == 404
+    assert c.get("/api/cta/arrivals", params={"station": "40100"}).json()["system"] == "cta"
+    lines = c.get("/api/cta/lines").json()
+    assert [l["id"] for l in lines["lines"]] == ["Brn", "G"] and lines["geojson"]["features"]
+    assert c.get("/api/cta/now").status_code == 404   # no CTA home yet
+    assert c.get("/api/cta/trains").json()["source"] == "none"

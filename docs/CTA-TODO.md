@@ -46,13 +46,17 @@ Base address: `https://lapi.transitchicago.com/api/1.0/`, with `outputType=JSON`
    - a CTA Timetable showing how often trains come ("every 6–8 min") plus first and last trains, instead of a full-day list.
    - Use the real schedule; use live data once the key is visible.
    - Any animation (for example the switch) gets a video for approval before it's built. The app uses the calm motion timing.
-2. **Server:** a CTA module next to `app/tracker.py`.
+2. **Server:** done Nov 13: `app/cta.py` + `app/cta_api.py`, endpoints under `/api/cta/...` (see README "CTA"), 20 tests in `tests/test_cta.py`.
+   - Built: schedule (L only) cached in `/config/cta`, checked daily with ETag (only re-downloads when CTA changes it); live arrivals/positions/follow fetched only on request, cached 30 s, 80,000/day budget then schedule fallback; alerts (no key); separate CTA home/work in `/config/cta-settings.json`; `/api/cta/now`; key blanked out of logs.
+   - Green southbound (Ashland/63rd + Cottage Grove) is one group, as approved. Red/Blue/Green group by direction, loop lines by destination.
+   - Not yet: CTA history (separate database) and on-time stats; passed stops on the follow sheet from the schedule.
+   - Original plan notes:
    - Load the schedule for the L only: stations, lines, track shapes, and timetables for first/last trains and frequency. Cache it like Metra's and check for a new version weekly.
    - Poll positions every 30 s. Fetch arrivals and follow-train data when needed, with a short cache.
    - Endpoints: either a `system=cta` parameter on the existing ones (stations, departures, trains, line, trip, lines/map) or a `/api/cta/...` set. Decide when building.
    - Settings: CTA home and work stations kept separately from Metra's (see Decision). Add `CTA_TRAIN_TRACKER_KEY` to `.env.example`, the Unraid template, `docker-compose.yml` and the README.
    - Tests in the same style as `tests/test_tracker.py`.
-3. **Front end:**
+3. **Front end (next):**
    - Metra | CTA switch, remembered per device (for example `metra.system` in localStorage).
    - All tabs reused: Next trains, Timetable (frequency version), Map (L shapes and trains), double-tap train sheet (built from `ttfollow` plus the schedule), Home and Work for CTA, alerts for CTA if wanted.
    - Line chips and colours from CTA. The disclaimer and the time the data was last updated follow whichever system is showing.
