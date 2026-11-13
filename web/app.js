@@ -192,7 +192,13 @@
     container: $("map"),
     onStationClick: (id) => selectStation(id, { pan: false }),
     popupHtml: trainPopup,
-    onLineFocus: (rid) => { renderMapHead(rid); refreshTrains(); },
+    onLineFocus: (rid) => {
+      mapView.closePopups();
+      renderMapHead(rid);
+      // Redraw the trains once the zoom to the line has finished, not during it.
+      clearTimeout(state.lineFocusT);
+      state.lineFocusT = setTimeout(refreshTrains, rid ? 750 : 0);
+    },
     // A train tapped on the map: highlight it on the board too.
     onTrainSelect: (t) => {
       state.selectedTrip = t ? t.trip_id : null;
@@ -1196,10 +1202,19 @@
     state.tab = b.dataset.tab;
     localStorage.setItem(TAB_KEY, state.tab);
     if (reload) state.departures = null;
+    tabSwitching = true;
     applyView();
+    tabSwitching = false;
+    // The new tab starts at the top (keeping the header in view), as one fade.
+    const tabsTop = document.querySelector(".tabs").getBoundingClientRect().top + window.scrollY;
+    if (window.scrollY > tabsTop) window.scrollTo(0, 0);
+    lastBoardKey = null;  // the page fade covers the first render; don't stagger on top of it
+    fadeIn(document.querySelector(".panel"));
     if (reload) refreshDepartures();
   }));
 
+  let tabSwitching = false;  // applyView during a tab switch: show/hide without per-part animations
+  const showEl = (el) => { if (tabSwitching) el.hidden = false; else enter(el); };
   function applyView() {
     const tabs = [...document.querySelectorAll(".tabs [data-tab]")];
     tabs.forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === state.tab)));
@@ -1212,7 +1227,7 @@
     const wasHidden = document.body.classList.contains("no-map");
     document.body.classList.toggle("no-map", mapHidden());
     document.body.classList.toggle("map-only", state.tab === "map");
-    if (state.tab === "map") { if ($("map-head").hidden) { renderMapHead(); enter($("map-head")); requestAnimationFrame(measureMapOverlays); } }
+    if (state.tab === "map") { if ($("map-head").hidden) { renderMapHead(); showEl($("map-head")); requestAnimationFrame(measureMapOverlays); } }
     else {
       $("map-head").hidden = true;
       if (mapView.lineFocus) mapView.setLineFocus(null, { fit: false });
@@ -1228,10 +1243,10 @@
     const lineMode = state.tab === "timetable" && !!state.ttLine;
     document.body.classList.toggle("tt-line-mode", lineMode);
     document.body.classList.toggle("tt-station-mode", state.tab === "timetable" && !lineMode);
-    if (state.tab === "timetable") { renderTtHead(); if ($("tt-head").hidden) enter($("tt-head")); }
+    if (state.tab === "timetable") { renderTtHead(); if ($("tt-head").hidden) showEl($("tt-head")); }
     else $("tt-head").hidden = true;
     const show = !lineMode && (state.tab === "timetable" || view.pickers !== "hide" || pickersOpen);
-    if (show && $("picker").hidden) enter($("picker")); else if (!show) $("picker").hidden = true;
+    if (show && $("picker").hidden) showEl($("picker")); else if (!show) $("picker").hidden = true;
     const btn = $("change-btn");
     btn.hidden = view.pickers !== "hide";
     btn.textContent = pickersOpen ? "Done" : "Change";
