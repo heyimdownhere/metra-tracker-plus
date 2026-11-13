@@ -186,7 +186,7 @@ class Settings:
             f"  TZ                    {os.environ.get('TZ', '(container default)')}",
             f"  REALTIME_INTERVAL     {self.realtime_interval}s",
             f"  STATIC_CHECK_INTERVAL {self.static_check_interval}s",
-            f"  STATIC_FULL_REFRESH   " + (f"every {self.static_full_refresh_days} days" if self.static_full_refresh_days else "off"),
+            "  STATIC_FULL_REFRESH   " + (f"every {self.static_full_refresh_days} days" if self.static_full_refresh_days else "off"),
             f"  HISTORY_DAYS          {self.history_days}" + (" (history off)" if self.history_days == 0 else ""),
             f"  HOME_STATION          {self.home_station or '(not set)'}",
             f"  HOME_DESTINATION      {self.home_destination or '(not set)'}",

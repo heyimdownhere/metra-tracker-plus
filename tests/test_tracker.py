@@ -476,7 +476,7 @@ def test_gps_tracking_estimates_delay_without_trip_update(tracker):
     assert r["time"] - r["scheduled"] == 360
     train = tracker._live_trains(at)[0]
     assert train["tracking"] and train["delay"] == 360 and train["next_stop"] == "Bravo"
-    from app.tracker import _status
+    from app.tracker_helpers import _status
     assert _status(r)[1] == "about 6 min late"
 
 
