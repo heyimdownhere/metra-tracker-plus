@@ -792,7 +792,7 @@ class Tracker:
     def _station_stops(self, station_id: str) -> list[str]:
         s = self.static
         stop_ids = s.station_children.get(station_id)
-        if stop_ids is None and station_id in s.stop_departures:
+        if stop_ids is None and (station_id in s.stop_departures):
             stop_ids = [station_id]
         if not stop_ids:
             raise KeyError(station_id)
@@ -858,12 +858,77 @@ class Tracker:
         return end.timestamp()
 
     def timetable(self, station_id: str, now: float | None = None, to: str | None = None) -> dict:
-        """Every train still to come today from a station (live times where Metra has them)."""
+        """Every train still to come today from a station (live times where Metra has them).
+
+        Without `to`, trains that end their trip here (e.g. at Ogilvie or Union Station)
+        are included too, as arrivals (`arriving: true`, `origin`, `time` = arrival).
+        """
         now = time.time() if now is None else now
         until = self.day_end(now)
         out = self.departures(station_id, limit=500, now=now, to=to, until=until)
+        if not to and self.static:
+            out["departures"] = sorted(
+                out["departures"] + self._terminal_arrivals(self._station_stops(station_id), now, until),
+                key=lambda r: r["time"],
+            )
         out["until"] = until
         return out
+
+    def _terminal_index(self) -> dict[str, list[tuple[int, str, int]]]:
+        """stop -> [(scheduled arrival, trip, seq)] for trips that end at that stop."""
+        s = self.static
+        if getattr(self, "_term_for", None) is not s:
+            idx: dict[str, list[tuple[int, str, int]]] = {}
+            for tid, sts in s.trip_stops.items():
+                if len(sts) > 1 and sts[-1][S_ARR] is not None:
+                    idx.setdefault(sts[-1][S_STOP], []).append((sts[-1][S_ARR], tid, sts[-1][S_SEQ]))
+            for v in idx.values():
+                v.sort()
+            self._term_idx, self._term_for = idx, s
+        return self._term_idx
+
+    def _terminal_arrivals(self, stop_ids: list[str], now: float, until: float) -> list[dict]:
+        """Trains still to arrive today at the end of their trip at one of these stops."""
+        s = self.static
+        idx = self._terminal_index()
+        rows, seen = [], set()
+        for d in s.candidate_service_dates(now):
+            base = s.service_day_start(d)
+            services = s.active_services(d)
+            lo = now - base - DEPARTURE_LOOKBACK_SECONDS
+            for stop_id in stop_ids:
+                arrs = idx.get(stop_id, [])
+                for arr, trip_id, seq in arrs[bisect_left(arrs, (int(lo), "", 0)):]:
+                    sched = base + arr
+                    if sched >= until:
+                        break
+                    trip = s.trips[trip_id]
+                    if trip[T_SERVICE] not in services or (trip_id, d) in seen:
+                        continue
+                    seen.add((trip_id, d))
+                    pred = None
+                    if self.realtime_live and self._rt_matches_date(trip_id, d):
+                        pred = self._predict(trip_id, seq, base)
+                    if pred is None and self._gps:
+                        pred = self._gps_pred(trip_id, d, seq, sched, now)
+                    if pred and pred["skipped"]:
+                        continue
+                    effective = pred["time"] if pred and pred["time"] else sched
+                    if effective < now - 30:
+                        continue
+                    sts = s.trip_stops[trip_id]
+                    row = self._row(trip_id, stop_id, sched, effective, pred, base)
+                    first = sts[0]
+                    row.update({
+                        "arriving": True,
+                        "direction": self._direction(first[S_STOP], stop_id),
+                        "origin": s.stop_name(first[S_STOP]),
+                        "origin_time": base + first[S_DEP] if first[S_DEP] is not None else None,
+                        "final_arrival": None,
+                        "history": None,
+                    })
+                    rows.append(row)
+        return rows
 
     def departures(
         self, station_id: str, limit: int = 5, now: float | None = None, to: str | None = None,

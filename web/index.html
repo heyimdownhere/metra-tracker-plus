@@ -66,7 +66,10 @@
         <button type="button" role="tab" id="tab-map" data-tab="map" aria-selected="false">Map</button>
       </nav>
       <div class="tt-head" id="tt-head" hidden>
-        <div class="line-chips" id="tt-line-chips" role="tablist" aria-label="Line timetables"></div>
+        <div class="chip-bar" id="tt-chip-bar" role="tablist" aria-label="Line timetables">
+          <div class="chip-pin" id="tt-line-pin"></div>
+          <div class="line-chips" id="tt-line-chips"></div>
+        </div>
       </div>
       <div class="picker" id="picker">
         <div class="picker-field">
@@ -125,6 +128,7 @@
           </button>
           <button id="change-btn" class="home-btn" type="button" aria-controls="picker" aria-expanded="false" hidden>Change</button>
           <button id="clear-btn" class="home-btn" type="button" title="Clear the destination and selected train; show all trains" hidden>✕ Clear</button>
+          <span id="board-tag" class="home-tag" hidden></span>
           <span id="board-updated" class="muted small"></span>
           </div>
         </div>
@@ -146,7 +150,10 @@
       </button>
       <div id="map-settings" class="map-settings" hidden></div>
       <div id="map-head" class="map-head" hidden>
-        <div class="line-chips" id="line-chips" role="tablist" aria-label="Lines"></div>
+        <div class="chip-bar" id="map-chip-bar" role="tablist" aria-label="Lines">
+          <div class="chip-pin" id="line-pin"></div>
+          <div class="line-chips" id="line-chips"></div>
+        </div>
       </div>
       <div id="line-card" class="line-card" hidden>
         <button type="button" class="line-card-x" id="line-card-x" aria-label="Show all lines">✕</button>

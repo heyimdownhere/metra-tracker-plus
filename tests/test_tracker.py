@@ -868,3 +868,17 @@ def test_line_trains_one_direction_running_first(tracker):
     assert tracker.line_trains("L1", "outbound", now=at)["trains"] == []  # nothing runs away from Central
     with pytest.raises(KeyError):
         tracker.line_trains("NOPE", now=at)
+
+
+def test_timetable_includes_trains_ending_at_the_station(tracker):
+    # Trains end their trip at terminals like Ogilvie: they never "depart" there,
+    # but the station timetable lists them too, as arrivals.
+    until = tracker.day_end(NOW)
+    arr = tracker._terminal_arrivals(["C"], NOW, until)
+    assert [r["trip_id"] for r in arr] == ["t-0800", "u-0815", "t-0830"]
+    r = arr[0]
+    assert r["arriving"] and r["origin"] == "Alpha" and r["final_arrival"] is None
+    assert datetime.fromtimestamp(r["time"], TZ).strftime("%H:%M") == "08:40"
+    assert datetime.fromtimestamp(r["origin_time"], TZ).strftime("%H:%M") == "08:00"
+    # Departure boards (Next trains) never include them.
+    assert not any(x.get("arriving") for x in tracker.timetable("A", now=NOW)["departures"])
