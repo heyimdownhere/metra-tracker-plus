@@ -637,21 +637,31 @@
     const p = state.home;
     const homeBtn = $("home-btn"), workBtn = $("work-btn"), go = $("go-home-btn");
     const atHome = !!p.home_station && state.station === p.home_station;
-    // One station can't be both: at your home only "Home" shows, at work only "Work".
-    homeBtn.hidden = !state.station || isWork();
-    workBtn.hidden = !state.station || atHome;
+    const atWork = !!p.work_station && state.station === p.work_station;
+    // Home and Work are always there (From row: jump to that station; "Set as …" when not set yet).
+    homeBtn.hidden = false;
+    workBtn.hidden = false;
     $("board-swap").hidden = !(state.station && state.dest) || (state.tab === "timetable" && !!state.ttLine);
     updateClear();
     homeBtn.classList.toggle("is-home", atHome);
-    $("home-btn-text").textContent = atHome ? "Home" : "Set as home";
-    homeBtn.title = atHome ? "Your home station" : "Make this your home station (opens here on every device)";
-    workBtn.classList.toggle("is-home", isWork());
-    $("work-btn-text").textContent = isWork() ? "Work" : "Set as work";
-    workBtn.title = isWork() ? "Your work station" : "Make this your work station";
-    // The quick button jumps to the right trip for the time of day.
-    const leg = p.leg;
-    go.hidden = !leg || onLeg();
-    $("go-home-text").textContent = !leg ? "Home" : leg.leg === "to_work" ? "To work" : leg.leg === "to_home" ? "To home" : "Home";
+    $("home-btn-text").textContent = p.home_station ? "Home" : "Set as home";
+    homeBtn.title = p.home_station ? (atHome ? "Your home station" : "Show your home station") : "Make this your home station";
+    homeBtn.disabled = !p.home_station && (!state.station || atWork);
+    workBtn.classList.toggle("is-home", atWork);
+    $("work-btn-text").textContent = p.work_station ? "Work" : "Set as work";
+    workBtn.title = p.work_station ? (atWork ? "Your work station" : "Show your work station") : "Make this your work station";
+    workBtn.disabled = !p.work_station && (!state.station || atHome);
+    // Board: To home / To work are always there; the trip you're looking at is highlighted.
+    const goWork = $("go-work-btn");
+    const both = !!(p.home_station && p.work_station);
+    const onToWork = both ? viewIs(p.home_station, p.work_station) : !!p.work_station && atWork && !state.dest;
+    const onToHome = both ? viewIs(p.work_station, p.home_station) : isHome();
+    go.classList.toggle("is-on", onToHome);
+    goWork.classList.toggle("is-on", onToWork);
+    $("go-home-text").textContent = p.home_station ? "Home" : "Set home";
+    $("go-work-text").textContent = p.work_station ? "Work" : "Set work";
+    go.title = p.home_station ? (p.work_station ? "Trains from work to home" : "Trains from your home station") : "Make the From station your home";
+    goWork.title = p.work_station ? (p.home_station ? "Trains from home to work" : "Trains from your work station") : "Make the From station your work";
   }
 
   async function saveProfile(values, what) {
@@ -675,9 +685,8 @@
 
   $("home-btn").addEventListener("click", () => {
     const p = state.home;
-    if (p.home_station && state.station === p.home_station) {
-      if (p.source === "env") alert(envNote("HOME_STATION"));
-      else if (confirm("Remove your home station?")) saveProfile({ home_station: null, home_dest: null }, "home station");
+    if (p.home_station) {
+      if (state.station !== p.home_station) selectStation(p.home_station);
     } else {
       // Keep a "Going to" as the home destination only when no work station is set.
       saveProfile({ home_station: state.station, home_dest: p.work_station ? null : (state.dest || null) }, "home station");
@@ -686,9 +695,8 @@
 
   $("work-btn").addEventListener("click", () => {
     const p = state.home;
-    if (isWork()) {
-      if (p.work_source === "env") alert(envNote("WORK_STATION"));
-      else if (confirm("Remove your work station?")) saveProfile({ work_station: null }, "work station");
+    if (p.work_station) {
+      if (state.station !== p.work_station) selectStation(p.work_station);
     } else {
       saveProfile({ work_station: state.station }, "work station");
     }
@@ -701,7 +709,23 @@
     selectDest(leg.to || "", { refresh: false });
     selectStation(leg.from);
   }
-  $("go-home-btn").addEventListener("click", goToLeg);
+  // To home / To work: the commute in that direction (or just the station if only one is set).
+  function goTrip(kind) {
+    const p = state.home;
+    const target = kind === "home" ? p.home_station : p.work_station;
+    const other = kind === "home" ? p.work_station : p.home_station;
+    if (!target) {
+      if (!state.station) { openSettings(); return; }
+      if (state.station === other) { alert(`That's your ${kind === "home" ? "work" : "home"} station.`); return; }
+      saveProfile(kind === "home" ? { home_station: state.station } : { work_station: state.station }, `${kind} station`);
+      return;
+    }
+    if (pickersOpen && view.pickers === "hide") { pickersOpen = false; applyView(); }  // opened by Clear
+    if (other) { selectDest(target, { refresh: false }); selectStation(other); }
+    else { selectDest(kind === "home" ? (p.home_dest || "") : "", { refresh: false }); selectStation(target); }
+  }
+  $("go-home-btn").addEventListener("click", () => goTrip("home"));
+  $("go-work-btn").addEventListener("click", () => goTrip("work"));
 
   // ---------- commute settings panel ----------
   // Works whether or not anything is configured: unset stations show
@@ -880,7 +904,7 @@
     $("board-title").textContent = "Line timetable";
     $("board-swap").hidden = true;  // the direction toggle below swaps here
     const asOf = d.data_as_of || {};
-    $("board-updated").textContent = asOf.realtime_updated ? `Metra data ${fmtDateTime(asOf.realtime_updated)}` : "Metra data";
+    $("board-updated").textContent = asOf.realtime_updated ? `Metra ${fmtDateTime(asOf.realtime_updated)}` : "Metra data";
     $("board-updated").title = dataStatement(asOf, "train");
     $("data-line").textContent = DISCLAIMER;
     $("data-line").hidden = false;
@@ -1047,11 +1071,10 @@
     $("board-title").innerHTML = (d.to ? `${stn(d.station && d.station.id, from)} → ${stn(d.to.id, d.to.name)}`
       : stn(d.station && d.station.id, from) + (d.route ? lineTitle() : ""))
       ;
-    $("board-tag").textContent = tag && !d.route ? tag : "";
-    $("board-tag").hidden = !(tag && !d.route);
+    $("board-tag").hidden = true;  // the highlighted To home / To work button says it
     const asOf = d.data_as_of || {};
     // License: when Metra last updated the data (here) + the disclaimer (small line below).
-    $("board-updated").textContent = asOf.realtime_updated ? `Metra data ${fmtDateTime(asOf.realtime_updated)}`
+    $("board-updated").textContent = asOf.realtime_updated ? `Metra ${fmtDateTime(asOf.realtime_updated)}`
       : asOf.schedule_published ? `Metra schedule ${asOf.schedule_published.split(" ")[0]}` : "Metra data";
     $("board-updated").title = dataStatement(asOf, "train");
     $("data-line").textContent = DISCLAIMER;
@@ -1094,13 +1117,13 @@
       const sel = r.trip_id && r.trip_id === state.selectedTrip;
       return `<li class="dep${r.cancelled ? " cancelled" : ""}${sel ? " selected" : ""}" style="--line:${esc(r.color)}"${r.trip_id ? ` data-trip="${esc(r.trip_id)}" data-route="${esc(r.route_id || "")}" tabindex="0" role="button" aria-pressed="${sel}" title="Show this train on the map"` : ""}>
         <div class="timecol"><div class="time">${bigTime(r.time)}${changed ? `<span class="sched">${fmtTime(r.scheduled)}</span>` : ""}</div></div>
-        ${r.arrival && d.to && r.destination === d.to.name
+        ${r.arrival && d.to
           ? `<div class="main"><div class="dest arr-head"${r.arrival_scheduled && fmtTime(r.arrival_scheduled) !== fmtTime(r.arrival) ? ` title="Scheduled ${esc(fmtTime(r.arrival_scheduled))}"` : ""}>Arrives <b>${fmtTime(r.arrival)}</b> <span class="trip">· ${Math.round((r.arrival - r.time) / 60)} min</span></div>
-        <div class="meta">${meta}</div>`
+        <div class="meta">${meta}${r.destination && r.destination !== d.to.name ? `<span class="beyond" title="Continues to ${esc(r.destination)}${r.final_arrival ? `, arriving ${esc(fmtTime(r.final_arrival))}` : ""}">→ ${esc(r.destination)}</span>` : ""}</div>`
           : `<div class="main"><div class="dest" title="${esc(r.destination)}">${esc(r.destination || r.route_name)}</div>
         <div class="meta">${meta}</div>
         ${r.arrival ? `<div class="arrive">Arrives ${esc(d.to.name)} ${timeChange(r.arrival_scheduled, r.arrival)} · ${Math.round((r.arrival - r.time) / 60)} min</div>` : ""}`}
-        ${finalHtml(r, d)}
+        ${r.arrival && d.to ? "" : finalHtml(r, d)}
         ${historyHtml(r.history)}
         ${r.delay_reason ? `<div class="reason" title="${esc(r.delay_reason)}">${esc(r.delay_reason)}</div>`
           : r.schedule_change ? `<div class="reason schedchg" title="${esc(r.schedule_change)}">${esc(r.schedule_change)}</div>` : ""}</div>
@@ -1459,7 +1482,9 @@
     if (show && $("picker").hidden) showEl($("picker")); else if (!show) $("picker").hidden = true;
     const btn = $("change-btn");
     btn.hidden = view.pickers !== "hide";
-    btn.textContent = pickersOpen ? "Done" : "Change";
+    if (!btn._icon) btn._icon = btn.innerHTML;
+    btn.innerHTML = pickersOpen ? "Done" : btn._icon;
+    btn.classList.toggle("icon-only", !pickersOpen);
     btn.setAttribute("aria-expanded", String(show));
     renderAlerts();
   }

@@ -916,3 +916,16 @@ body.tt-station-mode .hide-pickers { display: none; }
 .ts-more[hidden] { display: none; }
 body.sheet-open { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) { .ts-panel, .ts-scrim { transition: none; } }
+
+/* To home / To work: always on the board; the trip on screen is highlighted. Clear is just ✕. */
+.home-btn.go-place.is-on { color: var(--text); background: color-mix(in srgb, var(--accent) 22%, var(--panel-2)); border-color: var(--accent); }
+.home-btn.icon-only { padding-left: 9px; padding-right: 9px; }
+.board-actions { flex-wrap: nowrap; min-width: 0; }
+.board-actions #board-updated { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.home-btn[disabled] { opacity: .45; cursor: default; }
+/* Next trains: the From row doesn't repeat Home/Work (the board has To home / To work). */
+body:not(.tt-station-mode) #home-btn, body:not(.tt-station-mode) #work-btn { display: none; }
+.dep .meta .beyond { color: var(--muted); white-space: nowrap; }
+.dep .meta:has(.beyond) { flex-wrap: nowrap; }
+.dep .meta:has(.beyond) > * { flex-shrink: 0; }
+.dep .meta .beyond { flex-shrink: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }

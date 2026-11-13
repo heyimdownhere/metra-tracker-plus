@@ -122,12 +122,16 @@
           </button>
           </div>
           <div class="board-actions">
-          <button id="go-home-btn" class="home-btn go-home" type="button" hidden>
+          <button id="go-home-btn" class="home-btn go-place" type="button">
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
             <span id="go-home-text">Home</span>
           </button>
-          <button id="change-btn" class="home-btn" type="button" aria-controls="picker" aria-expanded="false" hidden>Change</button>
-          <button id="clear-btn" class="home-btn" type="button" title="Clear the destination and selected train; show all trains" hidden>✕ Clear</button>
+          <button id="go-work-btn" class="home-btn go-place" type="button">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6a2 2 0 0 1 2 2v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2Zm0 4h6V5H9v2Z"/></svg>
+            <span id="go-work-text">Work</span>
+          </button>
+          <button id="change-btn" class="home-btn icon-only" type="button" aria-controls="picker" aria-expanded="false" aria-label="Change stations" title="Change stations" hidden><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 17.25V21h3.75L17.8 9.94l-3.75-3.75L3 17.25Zm17.7-10.2a1 1 0 0 0 0-1.41l-2.34-2.34a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83Z"/></svg></button>
+          <button id="clear-btn" class="home-btn icon-only" type="button" aria-label="Clear" title="Clear: show all trains" hidden>✕</button>
           <span id="board-tag" class="home-tag" hidden></span>
           <span id="board-updated" class="muted small"></span>
           </div>
