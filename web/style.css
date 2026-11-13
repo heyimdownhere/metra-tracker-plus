@@ -829,7 +829,7 @@ body.tt-station-mode .hide-pickers { display: none; }
 .chip-bar .line-chips { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
   mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); }
 
-/* ==== calm motion (mockup) ==== */
+/* ==== calm motion ==== */
 /* Slower, softer timing everywhere: a long ease-out that settles gently. */
 :root { --ease: cubic-bezier(.22, 1, .36, 1); --t-fast: .2s; --t: .34s; --t-slow: .48s; }
 @keyframes fade-up   { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
