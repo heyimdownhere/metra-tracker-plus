@@ -57,7 +57,8 @@ Base address: `https://lapi.transitchicago.com/api/1.0/`, with `outputType=JSON`
    - Endpoints: either a `system=cta` parameter on the existing ones (stations, departures, trains, line, trip, lines/map) or a `/api/cta/...` set. Decide when building.
    - Settings: CTA home and work stations kept separately from Metra's (see Decision). Add `CTA_TRAIN_TRACKER_KEY` to `.env.example`, the Unraid template, `docker-compose.yml` and the README.
    - Tests in the same style as `tests/test_tracker.py`.
-3. **Front end (next):**
+3. **Front end:** built Nov 13 (`web/cta.js`, hooks in `app.js`): Metra | CTA switch (remembered per device as `next.system`), CTA From/Going to boxes with Set as home/work, Next trains cards (live, minutes, arrival at Going to, on-time line after 5 days), frequency Timetable, Map with L lines/stations/live trains and popups, double-tap sheet with passed stops, CTA alerts in the bell, CTA credit. Waiting for review before release.
+   - Original plan notes:
    - Metra | CTA switch, remembered per device (for example `metra.system` in localStorage).
    - All tabs reused: Next trains, Timetable (frequency version), Map (L shapes and trains), double-tap train sheet (built from `ttfollow` plus the schedule), Home and Work for CTA, alerts for CTA if wanted.
    - Line chips and colours from CTA. The disclaimer and the time the data was last updated follow whichever system is showing.

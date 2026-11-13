@@ -25,6 +25,10 @@
     <div class="brand">
       <svg class="logo" viewBox="0 0 24 24" aria-hidden="true"><path d="M7 2h10a4 4 0 0 1 4 4v9a4 4 0 0 1-3 3.87l1.7 2.55a1 1 0 1 1-1.66 1.1L15.96 19H8.04l-2.08 3.52a1 1 0 0 1-1.72-1.02L5.95 18.9A4 4 0 0 1 3 15V6a4 4 0 0 1 4-4Zm-1 5v4h12V7H6Zm2 7.5a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Zm8 0a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"/></svg>
       <h1>Next Stop</h1>
+      <div class="sys-switch" role="tablist" aria-label="Railroad">
+        <button type="button" role="tab" data-sys="metra" aria-selected="true">Metra</button>
+        <button type="button" role="tab" data-sys="cta" aria-selected="false">CTA</button>
+      </div>
     </div>
     <div class="topbar-right">
       <span id="mode-pill" class="pill" title="">Loading…</span>
@@ -109,6 +113,44 @@
                    placeholder="Any destination" role="combobox" aria-expanded="false"
                    aria-controls="dest-list" aria-autocomplete="list">
             <ul id="dest-list" class="station-list" role="listbox" hidden></ul>
+          </div>
+        </div>
+      </div>
+
+      <div class="picker cta-picker" id="cta-picker" hidden>
+        <div class="picker-field">
+          <div class="picker-label-row">
+            <label for="cta-from" class="picker-label">From</label>
+            <div class="pick-actions">
+              <button id="cta-home-btn" class="home-btn" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 11.5h3V21h5.5v-6h3v6H19v-9.5h3L12 3Z"/></svg>
+                <span id="cta-home-btn-text">Set as home</span>
+              </button>
+              <button id="cta-work-btn" class="home-btn" type="button">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6a2 2 0 0 1 2 2v2h3a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h3V5a2 2 0 0 1 2-2Zm0 4h6V5H9v2Z"/></svg>
+                <span id="cta-work-btn-text">Set as work</span>
+              </button>
+            </div>
+          </div>
+          <div class="picker-box">
+            <input id="cta-from" type="search" autocomplete="off" spellcheck="false"
+                   placeholder="CTA station or line (e.g. Clark/Lake, Brown)…" role="combobox" aria-expanded="false"
+                   aria-controls="cta-from-list" aria-autocomplete="list">
+            <ul id="cta-from-list" class="station-list" role="listbox" hidden></ul>
+          </div>
+        </div>
+        <div class="picker-field">
+          <div class="picker-label-row">
+            <label for="cta-to" class="picker-label">Going to <span class="optional">(optional)</span></label>
+            <button id="cta-swap" class="swap-btn" type="button" aria-label="Swap from and to" title="Swap">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3 3 7l4 4V8h11V6H7V3Zm10 10v3H6v2h11v3l4-4-4-4Z"/></svg>
+            </button>
+          </div>
+          <div class="picker-box">
+            <input id="cta-to" type="search" autocomplete="off" spellcheck="false"
+                   placeholder="Any destination" role="combobox" aria-expanded="false"
+                   aria-controls="cta-to-list" aria-autocomplete="list">
+            <ul id="cta-to-list" class="station-list" role="listbox" hidden></ul>
           </div>
         </div>
       </div>
@@ -313,6 +355,7 @@
     <div class="settings-foot"><button type="button" id="settings-done" class="primary-btn">Done</button></div>
     <footer class="settings-credits muted small">
       Schedule &amp; realtime data from Metra, redistributed by this server. Not sponsored, affiliated, or operated by Metra.
+      CTA 'L' data provided by CTA; not affiliated with or endorsed by CTA.
       <span id="data-version"></span>
     </footer>
     </div>
@@ -321,6 +364,7 @@
   <script src="vendor/maplibre/maplibre-gl.js"></script>
   <script src="vendor/protomaps/basemaps.js"></script>
   <script src="map.js"></script>
+  <script src="cta.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
