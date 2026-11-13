@@ -26,10 +26,14 @@ import zipfile
 from collections import defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
+from bisect import bisect_left
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import httpx
+
+from .cta_history import MAX_GAP, CtaHistory
+from .history import day_type
 
 log = logging.getLogger(__name__)
 
@@ -61,11 +65,14 @@ CREDIT = "Data provided by CTA. Not affiliated with or endorsed by CTA."
 
 # Bump when the pickled schedule's layout changes: an old pickle is then
 # ignored and the schedule downloaded again.
-SCHEMA = 1
+SCHEMA = 2
 
 ARRIVALS_TTL = 30      # seconds a station's arrivals are reused
 FOLLOW_TTL = 30        # seconds one train's remaining stops are reused
 ALERTS_TTL = 120       # seconds the alerts list is reused
+RECORD_INTERVAL = 30   # seconds between position checks for history (about 2,900 requests a day)
+SERVICE_DAY_START = 3 * 3600  # trains before 3 AM belong to the previous day's service
+STATS_TTL = 600        # seconds board history stats are reused
 DAILY_BUDGET = 80_000  # Train Tracker requests per day before falling back to the schedule (CTA's limit: 100,000)
 
 # Line ids as the schedule uses them; Train Tracker uses lower-case ids for
@@ -139,6 +146,14 @@ def _ymd(value: str) -> date:
     return datetime.strptime(value.strip(), "%Y%m%d").date()
 
 
+def service_date(ts: float) -> str:
+    return datetime.fromtimestamp(ts - SERVICE_DAY_START, TZ).date().isoformat()
+
+
+def _hour(ts: float) -> int:
+    return datetime.fromtimestamp(ts, TZ).hour
+
+
 def _platform(description: str | None) -> str | None:
     """'Service at Outer Loop platform' -> 'Outer Loop'; 'Subway service toward O'Hare' -> 'Subway'."""
     if not description:
@@ -164,6 +179,8 @@ class CtaSchedule:
     deps: dict[str, dict[str, dict[str, list[tuple[int, str]]]]]
     # (station, group key) -> destination station -> typical minutes
     reach: dict[tuple[str, str], dict[str, int]]
+    # group key -> the station orders its trains run (one per branch/pattern)
+    sequences: dict[str, list[list[str]]]
     calendar: dict[str, tuple[date, date, tuple[bool, ...]]]
     exceptions: dict[date, dict[str, int]]
     schema: int = SCHEMA
@@ -243,16 +260,27 @@ def parse_cta_zip(path: Path, version: str) -> CtaSchedule:
         station_routes: dict[str, set] = defaultdict(set)
         travel: dict[tuple[str, str, str], list[int]] = defaultdict(lambda: [0, 0])
         shape_trips: dict[str, set] = defaultdict(set)
+        patterns: dict[str, set] = defaultdict(set)
         for tid, sts in by_trip.items():
             rid, service, shape, dcode = trips[tid]
             if shape:
                 shape_trips[rid].add(shape)
             sts.sort()
+            legs: dict[str, list[str]] = defaultdict(list)
+            # Some stops leave the sign blank mid-trip (e.g. King Drive on
+            # Cottage Grove trains): carry the last one forward.
+            carried = next((h for _, _, _, h, _ in sts if h), "")
             for i, (_, station, secs, headsign, no_pickup) in enumerate(sts):
                 station_routes[station].add(rid)
+                headsign = carried = headsign or carried
+                if headsign:
+                    # Every stop the train makes under this sign, including the
+                    # last one and drop-off-only stops (for placing a train).
+                    gk = group_key(rid, dcode, headsign)
+                    if station not in legs[gk]:
+                        legs[gk].append(station)
                 if not headsign or no_pickup or i == len(sts) - 1:
                     continue  # last stop or no boarding: not a departure
-                gk = group_key(rid, dcode, headsign)
                 deps[station][gk][service].append((secs, headsign))
                 # Stations this train still reaches, until it comes back to one
                 # it already passed (round trips through the Loop).
@@ -264,6 +292,9 @@ def parse_cta_zip(path: Path, version: str) -> CtaSchedule:
                     acc = travel[(station, gk, other)]
                     acc[0] += osecs - secs
                     acc[1] += 1
+
+            for gk, leg in legs.items():
+                patterns[gk].add(tuple(leg))
 
         reach: dict[tuple[str, str], dict[str, int]] = defaultdict(dict)
         for (station, gk, other), (total, n) in travel.items():
@@ -304,6 +335,14 @@ def parse_cta_zip(path: Path, version: str) -> CtaSchedule:
                 drawn.append(coords)
         shapes[rid] = drawn
 
+    sequences: dict[str, list[list[str]]] = {}
+    for gk, pats in patterns.items():
+        # Drop patterns that are just a part of a longer one (short trips).
+        def inside(a: tuple, b: tuple) -> bool:
+            return len(a) < len(b) and any(b[i:i + len(a)] == a for i in range(len(b) - len(a) + 1))
+        full = [p for p in pats if not any(inside(p, q) for q in pats)]
+        sequences[gk] = [list(p) for p in sorted(full, key=len, reverse=True)[:6]]
+
     for station in deps.values():
         for groups in station.values():
             for times in groups.values():
@@ -311,7 +350,7 @@ def parse_cta_zip(path: Path, version: str) -> CtaSchedule:
     return CtaSchedule(
         version=version, lines=lines, shapes=shapes, stations=stations,
         deps={s: {g: dict(v) for g, v in gs.items()} for s, gs in deps.items()},
-        reach=dict(reach), calendar=calendar, exceptions=dict(exceptions),
+        reach=dict(reach), sequences=sequences, calendar=calendar, exceptions=dict(exceptions),
     )
 
 
@@ -365,7 +404,7 @@ class TrainTrackerError(RuntimeError):
 # ---- tracker -----------------------------------------------------------------------
 class CtaTracker:
     def __init__(self, config_dir: Path, api_key: str | None, static_url: str,
-                 check_hours: int = 24, enabled: bool = True):
+                 check_hours: int = 24, enabled: bool = True, history_days: int = 0):
         self.api_key = api_key
         self.static_url = static_url
         self.check_hours = check_hours
@@ -381,6 +420,14 @@ class CtaTracker:
         self._locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self._budget_day: date | None = None
         self.requests_today = 0
+        # History (its own database). _runs: what each train was doing at the
+        # last position check; _last_dep: when the last train left each
+        # station in each group, for the gap to the next one.
+        self.history = CtaHistory(config_dir / "cta-history.db", history_days)
+        self._runs: dict[tuple[str, str], dict] = {}
+        self._last_dep: dict[tuple[str, str], float] = {}
+        self._sched_cache: dict[tuple, list[float]] = {}
+        self.recorded_at: float | None = None
 
     @property
     def live_enabled(self) -> bool:
@@ -397,6 +444,14 @@ class CtaTracker:
         if not self.live_enabled:
             log.warning("CTA_TRAIN_TRACKER_KEY not set: CTA boards use the schedule only")
         self._tasks.append(asyncio.create_task(self._static_loop(), name="cta-static"))
+        if self.live_enabled and self.history.enabled:
+            try:
+                await asyncio.to_thread(self.history.open)
+                for r in await asyncio.to_thread(self.history.last_arrivals, time.time() - MAX_GAP):
+                    self._last_dep[(r["station"], r["gkey"])] = r["t"]
+                self._tasks.append(asyncio.create_task(self._record_loop(), name="cta-history"))
+            except Exception:
+                log.exception("Could not open the CTA history database; continuing without CTA history")
 
     async def stop(self) -> None:
         for t in self._tasks:
@@ -404,6 +459,126 @@ class CtaTracker:
         await asyncio.gather(*self._tasks, return_exceptions=True)
         if self._client:
             await self._client.aclose()
+        self.history.close()
+
+    async def _record_loop(self) -> None:
+        last_prune = 0.0
+        while True:
+            try:
+                if self.schedule is not None:
+                    await self.record_once()
+                if time.time() - last_prune > 6 * 3600:
+                    last_prune = time.time()
+                    await asyncio.to_thread(self.history.prune)
+            except asyncio.CancelledError:
+                raise
+            except TrainTrackerError as exc:
+                log.debug("CTA history: positions unavailable (%s)", exc)
+            except Exception:
+                log.exception("CTA history recording failed")
+            await asyncio.sleep(RECORD_INTERVAL)
+
+    async def record_once(self, now: float | None = None) -> tuple[int, int]:
+        """Check positions once and store departures and delays. Returns (departures, delays)."""
+        body = await self._positions()
+        now = time.time() if now is None else now
+        arrivals, delays = self.observe(body, now)
+        await asyncio.to_thread(self.history.record_arrivals, arrivals)
+        await asyncio.to_thread(self.history.record_delays, delays)
+        self.recorded_at = now
+        return len(arrivals), len(delays)
+
+    # ---- turning positions into history ---------------------------------------------
+    def _between(self, gk: str, a: str, b: str) -> list[str] | None:
+        """Stations a train on this group passes strictly between a and b, or None if
+        a and b aren't in that order on any of its routes."""
+        for seq in (self.schedule.sequences.get(gk, []) if self.schedule else []):
+            if a in seq and b in seq:
+                i, j = seq.index(a), seq.index(b)
+                if i < j:
+                    return seq[i + 1:j]
+        return None
+
+    def _sched_gap(self, station: str, gk: str, t: float) -> int | None:
+        """Scheduled time between trains in this group at this station around t."""
+        sd = service_date(t)
+        key = (station, gk, sd)
+        times = self._sched_cache.get(key)
+        if times is None:
+            d = date.fromisoformat(sd)
+            midnight = datetime(d.year, d.month, d.day, tzinfo=TZ).timestamp()
+            by_service = self.schedule.deps.get(station, {}).get(gk, {})
+            services = self.schedule.active_services(d)
+            times = sorted({midnight + secs for sid in services & by_service.keys() for secs, _ in by_service[sid]})
+            if len(self._sched_cache) > 5000:
+                self._sched_cache.clear()
+            self._sched_cache[key] = times
+        if len(times) < 2:
+            return None
+        # Gaps around t, leaving out breaks in service (e.g. overnight).
+        gaps = [b - a for a, b in zip(times, times[1:]) if b >= t - 1800 and a <= t + 1800 and 0 < b - a <= MAX_GAP]
+        if not gaps:
+            i = min(max(bisect_left(times, t), 1), len(times) - 1)
+            gaps = [g for g in [times[i] - times[i - 1]] if 0 < g <= MAX_GAP]
+        if not gaps:
+            return None
+        gaps.sort()
+        return int(gaps[(len(gaps) - 1) // 2])
+
+    def _departure(self, station: str, gk: str, run: str, t: float, delayed: bool, tracked: bool) -> tuple:
+        last = self._last_dep.get((station, gk))
+        gap = int(t - last) if last and 0 < t - last <= MAX_GAP else None
+        if not last or t > last:
+            self._last_dep[(station, gk)] = t
+        return (service_date(t), station, gk, run, int(t), gap, self._sched_gap(station, gk, t), int(delayed), int(tracked))
+
+    def observe(self, body: dict, now: float) -> tuple[list[tuple], list[tuple]]:
+        """Compare positions with the previous check: a train whose next station
+        changed has left the old one (and any it passed in between)."""
+        arrivals, delays = [], []
+        seen = set()
+        for rid, t in self._iter_positions(body):
+            run, nxt = t.get("rn"), t.get("nextStaId")
+            if not run or not nxt:
+                continue
+            gk = group_key(rid, t.get("trDr"), t.get("destNm"))
+            key = (rid, run)
+            seen.add(key)
+            prev = self._runs.get(key)
+            delayed_now = t.get("isDly") == "1"
+            state = {"gk": gk, "route": rid, "next": nxt, "arr": parse_cta_time(t.get("arrT")), "seen": now,
+                     "delayed": delayed_now or bool(prev and prev["next"] == nxt and prev["delayed"]),
+                     "delay_started": None}
+            if prev and prev["next"] != nxt:
+                left_at = min(prev["arr"] or now, now)
+                arrivals.append(self._departure(prev["next"], prev["gk"], run, left_at, prev["delayed"], True))
+                between = self._between(prev["gk"], prev["next"], nxt) or []
+                if len(between) <= 4:  # a bigger jump is a gap in the data, not a fast train
+                    for k, st in enumerate(between, 1):
+                        est = left_at + (now - left_at) * k / (len(between) + 1)
+                        arrivals.append(self._departure(st, prev["gk"], run, est, False, False))
+                state["delayed"] = delayed_now
+            if delayed_now:
+                started = prev["delay_started"] if prev and prev.get("delay_started") else now
+                state["delay_started"] = started
+                delays.append((service_date(started), rid, gk, run, nxt, t.get("nextStaNm"), int(started), int(now)))
+            self._runs[key] = state
+        for key in [k for k, v in self._runs.items() if k not in seen and now - v["seen"] > 300]:
+            del self._runs[key]  # finished, or out of service
+        return arrivals, delays
+
+    def _iter_positions(self, body: dict):
+        for route in body.get("route") or []:
+            rid = route_id(route.get("@name"))
+            if not rid:
+                continue
+            raw = route.get("train") or []
+            for t in raw if isinstance(raw, list) else [raw]:  # one train comes as an object
+                yield rid, t
+
+    async def _positions(self) -> dict:
+        return await self._cached("positions", ARRIVALS_TTL,
+                                  lambda: self._call("ttpositions.aspx", {"rt": POSITION_ROUTES}))
 
     async def _static_loop(self) -> None:
         await asyncio.sleep(2)  # let Metra's schedule go first on a fresh start
@@ -653,6 +828,7 @@ class CtaTracker:
             # Stable order (doesn't flip as trains come and go): most trains first, then A-Z.
             g["destinations"] = sorted(counts, key=lambda h: (-counts[h], h))
             g["label"] = " · ".join(g["destinations"])
+            g["history"] = await self._board_history(station, g["key"], now)
             out.append(g)
         out.sort(key=lambda g: g["trains"][0]["time"])
         return {
@@ -660,6 +836,22 @@ class CtaTracker:
             "source": source, "error": error, "as_of": as_of or now, "server_time": now,
             "groups": out, "credit": CREDIT,
         }
+
+    async def _board_history(self, station: str, gk: str, now: float) -> dict | None:
+        """How regular this group has been here at this time of day, and its delays
+        in the last 7 days (None until there's enough history)."""
+        if not self.history.available:
+            return None
+        hour, kind = _hour(now), day_type(service_date(now))
+
+        async def fetch():
+            stats = await asyncio.to_thread(self.history.group_stats, station, gk, hour, kind, 30, now, _hour)
+            delays = await asyncio.to_thread(self.history.delay_counts, now - 7 * 86400)
+            if stats is None:
+                return None
+            return {**stats, "delays_7d": delays.get(gk, 0), "day_type": kind, "hour": hour}
+
+        return await self._cached(f"hist:{station}:{gk}:{hour}:{kind}", STATS_TTL, fetch)
 
     def timetable(self, station: str, now: float | None = None) -> dict:
         """How often trains come today, per line and direction, plus first and last
@@ -712,32 +904,26 @@ class CtaTracker:
         if not self.live_enabled:
             return {"system": "cta", "source": "none", "trains": [], "error": "no key", "credit": CREDIT}
         try:
-            body = await self._cached("positions", ARRIVALS_TTL,
-                                      lambda: self._call("ttpositions.aspx", {"rt": POSITION_ROUTES}))
+            body = await self._positions()
         except TrainTrackerError as exc:
             self.live_error = str(exc)
             return {"system": "cta", "source": "none", "trains": [], "error": str(exc), "credit": CREDIT}
         out = []
-        for route in body.get("route") or []:
-            rid = route_id(route.get("@name"))
-            if not rid:
+        for rid, t in self._iter_positions(body):
+            try:
+                lat, lon = float(t["lat"]), float(t["lon"])
+            except (KeyError, TypeError, ValueError):
                 continue
-            raw = route.get("train") or []
-            for t in raw if isinstance(raw, list) else [raw]:  # one train comes as an object
-                try:
-                    lat, lon = float(t["lat"]), float(t["lon"])
-                except (KeyError, TypeError, ValueError):
-                    continue
-                if not lat or not lon:
-                    continue
-                heading = t.get("heading")
-                out.append({
-                    **self._line_info(rid), "run": t.get("rn"), "destination": t.get("destNm"),
-                    "next_station": t.get("nextStaNm"), "next_station_id": t.get("nextStaId"),
-                    "next_arrival": parse_cta_time(t.get("arrT")), "due": t.get("isApp") == "1",
-                    "delayed": t.get("isDly") == "1", "lat": lat, "lon": lon,
-                    "bearing": int(heading) if str(heading or "").isdigit() else None,
-                })
+            if not lat or not lon:
+                continue
+            heading = t.get("heading")
+            out.append({
+                **self._line_info(rid), "run": t.get("rn"), "destination": t.get("destNm"),
+                "next_station": t.get("nextStaNm"), "next_station_id": t.get("nextStaId"),
+                "next_arrival": parse_cta_time(t.get("arrT")), "due": t.get("isApp") == "1",
+                "delayed": t.get("isDly") == "1", "lat": lat, "lon": lon,
+                "bearing": int(heading) if str(heading or "").isdigit() else None,
+            })
         return {"system": "cta", "source": "live", "as_of": parse_cta_time(body.get("tmst")),
                 "trains": out, "credit": CREDIT}
 
@@ -757,6 +943,7 @@ class CtaTracker:
         etas = etas if isinstance(etas, list) else [etas]
         pos = body.get("position") or {}
         rid = route_id(etas[0].get("rt")) if etas else None
+        gk = group_key(rid, etas[0].get("trDr"), etas[0].get("destNm")) if rid else None
         stops = [{"station_id": e.get("staId"), "name": e.get("staNm"), "time": parse_cta_time(e.get("arrT")),
                   "due": e.get("isApp") == "1", "delayed": e.get("isDly") == "1", "scheduled": e.get("isSch") == "1"}
                  for e in etas]
@@ -765,9 +952,48 @@ class CtaTracker:
                      "bearing": int(pos["heading"]) if str(pos.get("heading", "")).isdigit() else None}
         except (KeyError, TypeError, ValueError):
             where = None
-        return {"system": "cta", "run": run, **(self._line_info(rid) if rid else {}),
+        now = time.time()
+        passed = await self._passed_stops(run, gk, stops, now) if gk and stops else []
+        delays_today = []
+        if self.history.available and rid:
+            delays_today = [d for d in await asyncio.to_thread(self.history.delays, 1, rid)
+                            if d["run"] == run and d["service_date"] == service_date(now)]
+        return {"system": "cta", "run": run, **(self._line_info(rid) if rid else {}), "key": gk,
                 "destination": etas[0].get("destNm") if etas else None,
-                "position": where, "stops": stops, "as_of": parse_cta_time(body.get("tmst")), "credit": CREDIT}
+                "delayed": any(s["delayed"] for s in stops[:1]),
+                "position": where, "passed": passed, "stops": stops,
+                "delays_today": [{"station_id": d["station"], "name": d["station_name"], "started": d["started"],
+                                  "minutes": round((d["ended"] - d["started"]) / 60)} for d in delays_today],
+                "as_of": parse_cta_time(body.get("tmst")), "credit": CREDIT}
+
+    async def _passed_stops(self, run: str, gk: str, stops: list[dict], now: float) -> list[dict]:
+        """Stations this train already left, in order. Times are the ones tracked
+        for this run today where the server saw it; otherwise estimated from
+        the schedule's running times ("estimated")."""
+        sch = self.schedule
+        upcoming = [s["station_id"] for s in stops]
+        seqs = [q for q in sch.sequences.get(gk, []) if upcoming[0] in q]
+        if not seqs:
+            return []
+        seq = max(seqs, key=lambda q: sum(1 for st in upcoming if st in q))
+        before = seq[:seq.index(upcoming[0])]
+        tracked = {}
+        if self.history.available:
+            for r in await asyncio.to_thread(self.history.run_today, service_date(now), run):
+                if r["gkey"] == gk:
+                    tracked[r["station"]] = r["t"]
+        first_time = stops[0]["time"]
+        out = []
+        for st in before:
+            t, source = tracked.get(st), "tracked"
+            if t is None:
+                mins = sch.reach.get((st, gk), {}).get(upcoming[0])
+                t, source = (first_time - mins * 60 if first_time and mins is not None else None), "estimated"
+            if t is not None and t > now:
+                t = now
+            info = sch.stations.get(st, {})
+            out.append({"station_id": st, "name": info.get("name", st), "time": t, "source": source})
+        return out
 
     async def alerts(self) -> list[dict]:
         """CTA's current alerts for L lines and stations (no key needed)."""
@@ -811,5 +1037,6 @@ class CtaTracker:
             "schedule_checked_at": meta.get("checked_at"), "schedule_error": self.static_error,
             "last_live": self.last_live, "live_error": self.live_error,
             "requests_today": self.requests_today, "daily_budget": DAILY_BUDGET,
+            "history": self.history.available, "history_recorded_at": self.recorded_at,
             "credit": CREDIT,
         }

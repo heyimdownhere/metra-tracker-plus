@@ -49,7 +49,8 @@ Base address: `https://lapi.transitchicago.com/api/1.0/`, with `outputType=JSON`
 2. **Server:** done Nov 13: `app/cta.py` + `app/cta_api.py`, endpoints under `/api/cta/...` (see README "CTA"), 20 tests in `tests/test_cta.py`.
    - Built: schedule (L only) cached in `/config/cta`, checked daily with ETag (only re-downloads when CTA changes it); live arrivals/positions/follow fetched only on request, cached 30 s, 80,000/day budget then schedule fallback; alerts (no key); separate CTA home/work in `/config/cta-settings.json`; `/api/cta/now`; key blanked out of logs.
    - Green southbound (Ashland/63rd + Cottage Grove) is one group, as approved. Red/Blue/Green group by direction, loop lines by destination.
-   - Not yet: CTA history (separate database) and on-time stats; passed stops on the follow sheet from the schedule.
+   - Done Nov 13 (second pass): CTA history in its own database (`/config/cta-history.db`): departures with actual vs scheduled gap ("on time" = no long wait; long wait = more than 2× the scheduled gap and 5+ min longer), delay log from Train Tracker's delayed flag, stats on each board group after 5 days, `/api/cta/history/...` endpoints and CSV; follow sheet's `passed` stops (tracked times, or estimated from the schedule) and the train's delays today.
+   - Known limits: passed stops on Brown/Orange/Pink/Purple/Yellow only go back to where the sign last changed (e.g. a Kimball-bound train shows its stops since the Loop). Stats need 5 days of data before they appear.
    - Original plan notes:
    - Load the schedule for the L only: stations, lines, track shapes, and timetables for first/last trains and frequency. Cache it like Metra's and check for a new version weekly.
    - Poll positions every 30 s. Fetch arrivals and follow-train data when needed, with a short cache.

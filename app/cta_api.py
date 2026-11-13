@@ -7,10 +7,13 @@ Clark/Lake), never Metra's.
 
 from __future__ import annotations
 
+import csv
+import io
+from datetime import datetime
 from typing import Callable
 
 from fastapi import APIRouter, Body, HTTPException, Query
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from .config import Settings, parse_switch_time, parse_work_days
 from .cta import TZ, CtaTracker, TrainTrackerError
@@ -110,6 +113,50 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
         if not cta.enabled:
             raise HTTPException(404, "CTA is turned off (CTA_ENABLED=false)")
         return _json(await cta.alerts())
+
+    def need_history():
+        if not cta.history.available:
+            raise HTTPException(404, "CTA history is off (needs CTA_TRAIN_TRACKER_KEY and HISTORY_DAYS > 0)")
+
+    @r.get("/history/station")
+    def history_station(station: str = Query(..., min_length=1), days: int = Query(30, ge=1, le=3650)):
+        """How regular each line/direction has been at a station, per day type and hour:
+        share of waits that weren't long (more than twice the scheduled gap and 5+ min
+        longer), average and scheduled gap, longest wait, trains flagged delayed."""
+        need_schedule()
+        need_history()
+        station_or_404(station)
+        return _json({"station": cta.station(station), "days": days,
+                      "groups": cta.history.station_stats(station, days, lambda t: datetime.fromtimestamp(t, TZ).hour)})
+
+    @r.get("/history/delays")
+    def history_delays(days: int = Query(7, ge=1, le=3650), route: str | None = Query(None)):
+        """Trains Train Tracker flagged as delayed: per line totals and the list."""
+        need_history()
+        return _json({"days": days, "lines": cta.history.delay_summary(days),
+                      "delays": cta.history.delays(days, route or None)})
+
+    @r.get("/history/export.csv")
+    def history_export(days: int = Query(30, ge=1, le=3650)):
+        """Every recorded departure as CSV."""
+        need_history()
+        cols = ["service_date", "station", "gkey", "run", "t", "gap", "sched_gap", "delayed", "tracked"]
+
+        def gen():
+            buf = io.StringIO()
+            w = csv.writer(buf)
+            w.writerow(cols)
+            for row in cta.history.iter_arrivals(days):
+                row["t"] = datetime.fromtimestamp(row["t"], TZ).isoformat(timespec="seconds")
+                w.writerow([row[c] for c in cols])
+                if buf.tell() > 65536:
+                    yield buf.getvalue()
+                    buf.seek(0)
+                    buf.truncate()
+            yield buf.getvalue()
+
+        return StreamingResponse(gen(), media_type="text/csv",
+                                 headers={"Content-Disposition": f'attachment; filename="cta-history-{days}d.csv"'})
 
     @r.get("/settings")
     def get_settings():

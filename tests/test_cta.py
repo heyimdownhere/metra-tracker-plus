@@ -328,3 +328,140 @@ def test_api_endpoints(api):
     assert [l["id"] for l in lines["lines"]] == ["Brn", "G"] and lines["geojson"]["features"]
     assert c.get("/api/cta/now").status_code == 404   # no CTA home yet
     assert c.get("/api/cta/trains").json()["source"] == "none"
+
+
+# ---- history: departures, gaps, delays ------------------------------------------------------
+from app.cta_history import CtaHistory, is_long_wait, summarize  # noqa: E402
+
+
+def _at(h, m, s=0, day=9):
+    return datetime(2026, 11, day, h, m, s, tzinfo=TZ).timestamp()
+
+
+def _iso(ts):
+    return datetime.fromtimestamp(ts, TZ).strftime("%Y-%m-%dT%H:%M:%S")
+
+
+def _pos(*trains):
+    """trains: (route, run, trDr, dest, next station, next arrival ts, delayed)"""
+    routes = {}
+    for rt, rn, trdr, dest, nxt, arr, dly in trains:
+        routes.setdefault(rt, []).append({"rn": rn, "trDr": trdr, "destNm": dest, "nextStaId": nxt,
+                                          "nextStaNm": nxt, "arrT": _iso(arr), "isDly": "1" if dly else "0",
+                                          "lat": "41.9", "lon": "-87.6", "heading": "0"})
+    return {"tmst": "x", "route": [{"@name": k, "train": v} for k, v in routes.items()]}
+
+
+@pytest.fixture()
+def recorder(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule)
+    t.history = CtaHistory(tmp_path / "cta-history.db", 30)
+    t.history.open()
+    yield t
+    t.history.close()
+
+
+def test_a_train_leaving_a_station_is_recorded_with_its_gap(recorder):
+    t = recorder
+    a, _ = t.observe(_pos(("g", "605", "5", "Ashland/63rd", "40100", _at(8, 0), False)), _at(7, 59))
+    assert a == []
+    a, _ = t.observe(_pos(("g", "605", "5", "Ashland/63rd", "40200", _at(8, 5), False)), _at(8, 1))
+    assert len(a) == 1
+    sd, station, gk, run, when, gap, sched_gap, delayed, tracked = a[0]
+    assert (sd, station, gk, run, when) == ("2026-11-09", "40100", "G:5", "605", int(_at(8, 0)))
+    assert gap is None and sched_gap == 240 and tracked == 1     # first train seen; scheduled every 4 min
+    # The Cottage Grove train 4 minutes later is in the same group: gap 4 min, not a long wait.
+    t.observe(_pos(("g", "006", "5", "Cottage Grove", "40100", _at(8, 4), False)), _at(8, 3))
+    a, _ = t.observe(_pos(("g", "006", "5", "Cottage Grove", "40200", _at(8, 9), False)), _at(8, 5))
+    assert a[0][5] == 240 and not is_long_wait(a[0][5], a[0][6])
+    # A train 26 minutes after that is a long wait.
+    t.observe(_pos(("g", "607", "5", "Ashland/63rd", "40100", _at(8, 30), False)), _at(8, 29))
+    a, _ = t.observe(_pos(("g", "607", "5", "Ashland/63rd", "40200", _at(8, 35), False)), _at(8, 31))
+    assert a[0][5] == 26 * 60 and is_long_wait(a[0][5], a[0][6])
+
+
+def test_stations_passed_between_two_checks_are_filled_in(recorder):
+    t = recorder
+    t.observe(_pos(("brn", "404", "1", "Kimball", "40100", _at(8, 0), False)), _at(7, 59, 30))
+    a, _ = t.observe(_pos(("brn", "404", "1", "Kimball", "40500", _at(8, 15), False)), _at(8, 0, 30))
+    assert [(r[1], r[8]) for r in a] == [("40100", 1), ("40700", 0)]   # Merchandise Mart skipped over
+    assert a[0][4] < a[1][4] <= _at(8, 0, 30)
+
+
+def test_delays_are_one_entry_that_grows(recorder):
+    t = recorder
+    _, d1 = t.observe(_pos(("g", "605", "5", "Ashland/63rd", "40200", _at(8, 5), True)), _at(8, 2))
+    _, d2 = t.observe(_pos(("g", "605", "5", "Ashland/63rd", "40200", _at(8, 9), True)), _at(8, 6))
+    t.history.record_delays(d1)
+    t.history.record_delays(d2)
+    rows = t.history.delays(3650)
+    assert len(rows) == 1 and rows[0]["ended"] - rows[0]["started"] == 240 and rows[0]["gkey"] == "G:5"
+    # The departure after a delay is marked delayed.
+    a, _ = t.observe(_pos(("g", "605", "5", "Ashland/63rd", "40300", _at(8, 20), False)), _at(8, 10))
+    assert a[0][1] == "40200" and a[0][7] == 1
+
+
+def test_record_once_stores_rows(recorder):
+    t = recorder
+    bodies = [_pos(("g", "605", "5", "Ashland/63rd", "40100", _at(8, 0), False)),
+              _pos(("g", "605", "5", "Ashland/63rd", "40200", _at(8, 5), False))]
+    t._client = httpx.AsyncClient(transport=httpx.MockTransport(
+        lambda r: httpx.Response(200, json={"ctatt": {"errCd": "0", **bodies.pop(0)}})))
+    run(t.record_once(now=_at(7, 59)))
+    t._cache.clear()
+    assert run(t.record_once(now=_at(8, 1))) == (1, 0)
+    assert t.history.run_today("2026-11-09", "605")[0]["station"] == "40100"
+
+
+def test_stats_need_five_days_then_show_on_time_share(recorder, monkeypatch):
+    h = recorder.history
+    rows = []
+    for day in range(2, 7):  # Mon 2 - Fri 6 November
+        base = _at(8, 0, day=day)
+        rows += [(f"2026-11-0{day}", "40100", "G:5", f"r{day}a", int(base), 240, 240, 0, 1),
+                 (f"2026-11-0{day}", "40100", "G:5", f"r{day}b", int(base + 1500), 1500, 240, 1 if day == 6 else 0, 1)]
+    h.record_arrivals(rows[:8])
+    hour = lambda ts: datetime.fromtimestamp(ts, TZ).hour  # noqa: E731
+    assert h.group_stats("40100", "G:5", 8, "weekday", now=_at(9, 0), hour_fn=hour) is None   # 4 days
+    h.record_arrivals(rows[8:])
+    s = h.group_stats("40100", "G:5", 8, "weekday", now=_at(9, 0), hour_fn=hour)
+    assert s["days"] == 5 and s["on_time_pct"] == 50 and s["long_waits"] == 5
+    assert s["longest_wait_min"] == 25 and s["sched_gap_min"] == 4.0 and s["delayed_trains"] == 1
+    assert h.group_stats("40100", "G:5", 8, "saturday", now=_at(9, 0), hour_fn=hour) is None
+    # The board shows it for that group.
+    recorder._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=LIVE)))
+    monkeypatch.setattr(cta_mod, "_hour", lambda ts: 8)
+    d = run(recorder.arrivals("40100", now=_at(9, 0)))
+    g = {x["key"]: x for x in d["groups"]}
+    assert g["G:5"]["history"]["on_time_pct"] == 50 and g["Brn:Kimball"]["history"] is None
+
+
+def test_summarize_ignores_unknown_gaps():
+    rows = [{"service_date": f"2026-11-0{d}", "gap": None, "sched_gap": 240, "delayed": 0} for d in range(1, 7)]
+    assert summarize(rows) is None
+
+
+# ---- double-tap sheet: passed stops ---------------------------------------------------------
+FOLLOW = {"ctatt": {"tmst": "2026-11-09T08:08:00", "errCd": "0", "position": {"lat": "41.87", "lon": "-87.62", "heading": "180"},
+          "eta": [{"staId": "40200", "staNm": "Roosevelt", "rn": "006", "rt": "Green Line", "destNm": "Cottage Grove",
+                   "trDr": "5", "arrT": "2026-11-09T08:09:00", "isApp": "1", "isSch": "0", "isDly": "0"},
+                  {"staId": "40400", "staNm": "Cottage Grove", "rn": "006", "rt": "Green Line", "destNm": "Cottage Grove",
+                   "trDr": "5", "arrT": "2026-11-09T08:25:00", "isApp": "0", "isSch": "0", "isDly": "0"}]}}
+
+
+def test_follow_lists_passed_stops_estimated_from_schedule(tmp_path, schedule, monkeypatch):
+    monkeypatch.setattr(cta_mod.time, "time", lambda: _at(8, 8))
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=FOLLOW))
+    d = run(t.follow("006"))
+    assert d["key"] == "G:5" and d["route_short"] == "Green"
+    assert [s["station_id"] for s in d["stops"]] == ["40200", "40400"]
+    assert d["passed"] == [{"station_id": "40100", "name": "Clark/Lake", "time": _at(8, 4), "source": "estimated"}]
+
+
+def test_follow_uses_tracked_times_when_recorded(recorder, monkeypatch):
+    monkeypatch.setattr(cta_mod.time, "time", lambda: _at(8, 8))
+    t = recorder
+    t.history.record_arrivals([("2026-11-09", "40100", "G:5", "006", int(_at(8, 5)), None, 240, 0, 1)])
+    t._client = httpx.AsyncClient(transport=httpx.MockTransport(lambda r: httpx.Response(200, json=FOLLOW)))
+    d = run(t.follow("006"))
+    assert d["passed"][0]["time"] == _at(8, 5) and d["passed"][0]["source"] == "tracked"

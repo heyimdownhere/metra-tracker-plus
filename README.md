@@ -227,7 +227,13 @@ The CTA 'L' side is kept apart from Metra: CTA station ids (e.g. `40380` Clark/L
 | `/api/cta/alerts` | CTA alerts for L lines and stations (bus-only alerts left out). |
 | `/api/cta/lines`, `/api/cta/stations` | Lines with colours and track shapes; stations. |
 | `/api/cta/settings` (GET/PUT), `/api/cta/now` | CTA home/work and the board for right now. |
+| `/api/cta/follow?run=409` → `passed` | Stations the train already left, with the time it was seen there (`tracked`) or estimated from the schedule (`estimated`), and its delays today. |
+| `/api/cta/history/station?station=40380[&days=30]` | How regular each line/direction has been, per day type and hour. |
+| `/api/cta/history/delays[?days=7&route=G]` | Trains CTA flagged as delayed: totals per line and each delay (where, when, how long). |
+| `/api/cta/history/export.csv[?days=30]` | Every recorded departure. |
 | `/api/cta/status` | Schedule version, last live data, requests used today. |
+
+**CTA history** (`/config/cta-history.db`, kept for `HISTORY_DAYS`, needs the CTA key). CTA doesn't say how many minutes late an L train is, and L trains aren't tied to timetable trips, so "on time" for the L means *trains came as often as scheduled*. Every 30 s the server checks train positions (about 2,900 requests a day); when a train moves on from a station, that's a departure, saved with the gap since the previous train in the same line and direction and the scheduled gap at that time. A gap more than twice the scheduled one and at least 5 minutes longer is a **long wait**. Each board group then gets, once there are 5+ days of data, "92% on time · every 7 min (scheduled 6) · longest wait 18 min · 2 delays this week" for that time of day and kind of day. Trains CTA flags as delayed (stopped moving) are logged with where and how long.
 
 CTA data is used under CTA's Developer License Agreement: "Data provided by CTA. Not affiliated with or endorsed by CTA."
 

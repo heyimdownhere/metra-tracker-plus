@@ -36,7 +36,8 @@ tracker = Tracker(settings)
 user_settings = UserSettings(settings.config_dir / "settings.json")
 # CTA is kept apart: its own tracker, schedule cache (/config/cta) and settings file.
 cta = CtaTracker(settings.config_dir, settings.cta_api_key, settings.cta_static_url,
-                 check_hours=settings.cta_static_check_hours, enabled=settings.cta_enabled)
+                 check_hours=settings.cta_static_check_hours, enabled=settings.cta_enabled,
+                 history_days=settings.history_days)
 cta_settings = UserSettings(settings.config_dir / "cta-settings.json")
 basemap = BaseMap(settings.config_dir, enabled=settings.map_download, source=settings.map_source,
                   bbox=settings.map_bbox, max_zoom=settings.map_max_zoom, refresh_days=settings.map_refresh_days)
