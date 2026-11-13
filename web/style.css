@@ -61,7 +61,7 @@ button { font: inherit; color: inherit; }
   position: relative; z-index: 1000;
 }
 .brand { display: flex; align-items: center; gap: 10px; }
-.logo { width: 26px; height: 26px; fill: var(--accent); }
+.logo { width: 30px; height: 30px; border-radius: 8px; display: block; flex: none; }
 .brand h1 { font-size: 18px; margin: 0; letter-spacing: .2px; }
 .brand h1 span { color: var(--accent); }
 /* Narrow phones: keep the logo, drop the title, so the buttons fit. */

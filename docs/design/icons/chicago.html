@@ -1,0 +1,168 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Next Stop 3D icon mockups</title>
+<style>
+:root{--bg:#0f1216;--panel:#161b22;--panel2:#1d232c;--border:#2a313c;--text:#e6edf3;--muted:#8b96a5;--accent:#4ea1ff}
+body{margin:0;background:#0b0e12;color:var(--text);font:15px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:28px}
+h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 22px}
+.grid{display:grid;grid-template-columns:repeat(2,1fr);gap:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px}
+.card h2{font-size:16px;margin:0 0 2px;display:flex;gap:8px;align-items:center}.card h2 b{background:var(--accent);color:#0f1216;border-radius:6px;padding:1px 7px;font-size:13px}
+.card p{color:var(--muted);font-size:13px;margin:0 0 12px;min-height:34px}
+.big{display:flex;justify-content:center;margin:4px 0 14px}.big .t{width:200px;height:200px;border-radius:44px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.row{display:flex;gap:14px;align-items:flex-end}
+.home{background:linear-gradient(135deg,#3a4b6b,#6b4a6e 60%,#a3685a);border-radius:12px;padding:12px 14px 8px;display:flex;flex-direction:column;align-items:center;gap:5px;width:92px}
+.home .tile{width:62px;height:62px;border-radius:16px;overflow:hidden;box-shadow:0 3px 10px rgba(0,0,0,.35)}
+.home span{font-size:11px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.small{display:flex;flex-direction:column;gap:8px;flex:1}
+.tab{display:flex;align-items:center;gap:6px;background:#2b3038;border-radius:8px 8px 0 0;padding:6px 10px;font-size:12px;color:#cfd6df;width:118px}
+.tab .fv{width:16px;height:16px;border-radius:3px;overflow:hidden}
+.hdr{display:flex;align-items:center;gap:8px;border-radius:10px;padding:8px 10px;font-weight:700;font-size:15px}
+.hdr.dark{background:var(--bg);color:var(--text)}.hdr.light{background:#fff;color:#121820;border:1px solid #d8dde4}
+.hdr .mini{width:28px;height:28px;border-radius:7px;overflow:hidden;flex:none}.tab .fv{border-radius:4px}
+.note{margin-top:22px;color:var(--muted);font-size:13px}
+</style></head><body>
+<h1>Next Stop: N2 with a Chicago skyline</h1>
+<p class="sub">N2 (magenta sky, neon train) with the skyline redrawn as stylized Chicago towers. Each is shown large, on a home screen, as a browser tab and in the header.</p>
+<div class="grid" id="grid"></div>
+<p class="note">Original drawings: a generic commuter train and simplified tower shapes inspired by the Chicago skyline; no Metra or CTA livery or logos.</p>
+<script>
+// Geometry: the train's length runs along L (toward bottom right), its width along W, height along V (up).
+const L = [1, 0.6], W = [0.55, -0.35], V = [0, -1];
+const add = (p, v, k = 1) => [p[0] + v[0] * k, p[1] + v[1] * k];
+const pts = (a) => a.map((p) => p.map((n) => n.toFixed(2)).join(",")).join(" ");
+const D = [40, 56];                     // front, bottom, near corner
+const w = 22, h = 22, len = 46;
+const C = add(D, W, w), A = add(D, V, h), B = add(C, V, h);           // front face: D C B A
+const E = add(D, L, -len), F = add(E, V, h), G = add(F, W, w);        // back of the train (off the tile)
+const onFront = (u, v) => add(add(D, W, w * u), V, h * v);
+const onSide = (s, v) => add(add(D, L, -len * s), V, h * v);
+const quad = (f, a, b, c, d) => pts([f(a[0], a[1]), f(b[0], b[1]), f(c[0], c[1]), f(d[0], d[1])]);
+const box = (f, u0, u1, v0, v1) => quad(f, [u0, v0], [u1, v0], [u1, v1], [u0, v1]);
+
+function train3d(id, c) {
+  const g = (n) => `${id}-${n}`;
+  // windows along the side (3 visible, receding)
+  const wins = [[0.06, 0.2], [0.26, 0.4], [0.46, 0.6]].map(([a, b]) => `<polygon points="${box(onSide, a, b, 0.52, 0.84)}" fill="url(#${g("glass")})"/>`).join("");
+  const doors = [[0.215, 0.245]].map(([a, b]) => `<polygon points="${box(onSide, a, b, 0.08, 0.84)}" fill="${c.sideDark}" opacity=".5"/>`).join("");
+  // rails and ties, extending ahead of the train
+  const r1a = add(add(D, L, -len), [0, 3]), r1b = add(add(D, L, 16), [0, 3]);
+  const r2a = add(r1a, W, w), r2b = add(r1b, W, w);
+  let ties = "";
+  for (let k = -len; k <= 16; k += 5.5) { const p = add(add(D, L, k), [0, 3.6]); const q = add(p, W, w); ties += `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${c.tie}" stroke-width="1.6" stroke-linecap="round"/>`; }
+  const streaks = [[-6, 10, 18], [-2, 20, 12], [4, 2, 14], [8, 14, 9]].map(([ox, oy, l]) => {
+    const p = [ox, oy], q = add(p, L, l); return `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${c.streak}" stroke-width="2" stroke-linecap="round" opacity=".55"/>`; }).join("");
+  const hl = (u) => onFront(u, 0.22);
+  const beams = c.beams ? `<polygon points="${pts([add(hl(0.18), [0, -1.5]), [66, 66], [44, 72], add(hl(0.18), [0, 1.5])])}" fill="url(#${g("beam")})" filter="url(#${g("soft")})"/>
+      <polygon points="${pts([add(hl(0.82), [0, -1.5]), [72, 54], [70, 70], add(hl(0.82), [0, 1.5])])}" fill="url(#${g("beam")})" filter="url(#${g("soft")})"/>` : "";
+  return `<svg viewBox="0 0 64 64" width="100%" height="100%">
+  <defs>
+    <linearGradient id="${g("bg")}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c.bg1}"/><stop offset="1" stop-color="${c.bg2}"/></linearGradient>
+    <linearGradient id="${g("side")}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c.side1}"/><stop offset="1" stop-color="${c.side2}"/></linearGradient>
+    <linearGradient id="${g("front")}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c.front1}"/><stop offset="1" stop-color="${c.front2}"/></linearGradient>
+    <linearGradient id="${g("roof")}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${c.roof1}"/><stop offset="1" stop-color="${c.roof2}"/></linearGradient>
+    ${c.lit ? `<linearGradient id="${g("glass")}" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="${c.lit[0]}"/><stop offset="1" stop-color="${c.lit[1]}"/></linearGradient>`
+        : `<linearGradient id="${g("glass")}" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="#9fb4cc"/><stop offset=".35" stop-color="#2a3442"/><stop offset="1" stop-color="#0d1117"/></linearGradient>`}
+    <linearGradient id="${g("cab")}" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="#9fb4cc"/><stop offset=".35" stop-color="#2a3442"/><stop offset="1" stop-color="#0d1117"/></linearGradient>
+    <radialGradient id="${g("sky")}" cx=".85" cy=".15" r=".6"><stop offset="0" stop-color="${c.glow || c.bg2}" stop-opacity=".9"/><stop offset="1" stop-color="${c.glow || c.bg2}" stop-opacity="0"/></radialGradient>
+    <linearGradient id="${g("fade")}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c.bg1}" stop-opacity="1"/><stop offset=".35" stop-color="${c.bg1}" stop-opacity="0"/></linearGradient>
+    <radialGradient id="${g("lamp")}"><stop offset="0" stop-color="#fffbe8"/><stop offset=".45" stop-color="#ffe9a3"/><stop offset="1" stop-color="#ffd36b" stop-opacity="0"/></radialGradient>
+    <linearGradient id="${g("beam")}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff3c4" stop-opacity=".32"/><stop offset="1" stop-color="#fff3c4" stop-opacity="0"/></linearGradient>
+    <filter id="${g("soft")}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.4"/></filter>
+    <filter id="${g("blur")}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+  </defs>
+  <rect width="64" height="64" fill="url(#${g("bg")})"/>
+  ${c.glow ? `<rect width="64" height="64" fill="url(#${g("sky")})"/>` : ""}
+  ${c.back || ""}
+  ${streaks}
+  <g opacity=".9"><line x1="${r1a[0]}" y1="${r1a[1]}" x2="${r1b[0]}" y2="${r1b[1]}" stroke="${c.rail}" stroke-width="1.3"/>${ties}
+    <line x1="${r2a[0]}" y1="${r2a[1]}" x2="${r2b[0]}" y2="${r2b[1]}" stroke="${c.rail}" stroke-width="1.3"/></g>
+  <polygon points="${pts([add(D, [0, 4]), add(C, [0, 4]), add(add(C, L, -len), [0, 4]), add(E, [0, 4])])}" fill="#000" opacity=".45" filter="url(#${g("blur")})"/>
+  ${beams}
+  <polygon points="${pts([D, E, F, A])}" fill="url(#${g("side")})"/>
+  <polygon points="${box(onSide, 0, 1, 0.3, 0.4)}" fill="${c.stripe}"/>
+  ${doors}${wins}
+  <polygon points="${pts([A, F, G, B])}" fill="url(#${g("roof")})"/>
+  <polygon points="${pts([D, C, B, A])}" fill="url(#${g("front")})"/>
+  <polygon points="${box(onFront, 0, 1, 0.3, 0.4)}" fill="${c.stripe}"/>
+  <polygon points="${box(onFront, 0.12, 0.88, 0.52, 0.86)}" fill="url(#${g("cab")})"/>
+  <polygon points="${quad(onFront, [0.18, 0.84], [0.46, 0.84], [0.3, 0.58], [0.16, 0.58])}" fill="#fff" opacity=".18"/>
+  <line x1="${A[0]}" y1="${A[1]}" x2="${B[0]}" y2="${B[1]}" stroke="${c.edge}" stroke-width=".8" opacity=".9"/>
+  <line x1="${A[0]}" y1="${A[1]}" x2="${D[0]}" y2="${D[1]}" stroke="${c.edge}" stroke-width=".8" opacity=".6"/>
+  <circle cx="${hl(0.18)[0]}" cy="${hl(0.18)[1]}" r="3.6" fill="url(#${g("lamp")})"/><circle cx="${hl(0.82)[0]}" cy="${hl(0.82)[1]}" r="3.6" fill="url(#${g("lamp")})"/>
+  <polygon points="${box(onFront, 0.38, 0.62, 0.06, 0.14)}" fill="#0d1117" opacity=".7"/>
+  ${c.roofSnow ? `<polygon points="${pts([add(A, [0, 0.6]), add(F, [0, 0.6]), add(G, [0, -0.6]), add(B, [0, -0.6])])}" fill="#f4f8ff" opacity=".95"/><polygon points="${pts([A, F, add(F, [0, 2.2]), add(A, [0, 1.6])])}" fill="#f4f8ff"/>` : ""}
+  ${c.front_ || ""}
+  <rect width="64" height="64" fill="url(#${g("fade")})"/>
+</svg>`;
+}
+// Flat version of the same angle, one colour (+ lighter side), for 16-26 px.
+function flat(color, side, cut) {
+  return `<svg viewBox="2 4 60 58"><polygon points="${pts([D, add(D, L, -30), add(add(D, L, -30), V, h), A])}" fill="${side}"/>
+    <polygon points="${pts([D, C, B, A])}" fill="${color}"/>
+    <polygon points="${box(onFront, 0.14, 0.86, 0.52, 0.84)}" fill="${cut}"/>
+    <polygon points="${box(onSide, 0.1, 0.32, 0.52, 0.84)}" fill="${cut}"/><polygon points="${box(onSide, 0.42, 0.64, 0.52, 0.84)}" fill="${cut}"/>
+    <circle cx="${onFront(0.2, 0.22)[0]}" cy="${onFront(0.2, 0.22)[1]}" r="2.4" fill="${cut}"/><circle cx="${onFront(0.8, 0.22)[0]}" cy="${onFront(0.8, 0.22)[1]}" r="2.4" fill="${cut}"/>
+    <line x1="${add(D, L, -32)[0]}" y1="${add(D, L, -32)[1] + 4}" x2="${add(D, L, 8)[0]}" y2="${add(D, L, 8)[1] + 4}" stroke="${color}" stroke-width="2.4" stroke-linecap="round"/></svg>`;
+}
+
+// Deterministic "random" so every size draws the same scenery.
+let seed = 7; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+function stars(n, color = "#fff") { seed = 11; let o = ""; for (let i = 0; i < n; i++) { const x = rnd() * 64, y = rnd() * 30; if (x > 30 && y > 18) continue; o += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(0.25 + rnd() * 0.5).toFixed(2)}" fill="${color}" opacity="${(0.4 + rnd() * 0.6).toFixed(2)}"/>`; } return o; }
+function rain() { seed = 3; let o = ""; for (let i = 0; i < 34; i++) { const x = rnd() * 70 - 4, y = rnd() * 64; o += `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x - 1.2).toFixed(1)}" y2="${(y + 4.5).toFixed(1)}" stroke="#9fc4ff" stroke-width=".45" opacity=".5"/>`; } return o; }
+function snow() { seed = 5; let o = ""; for (let i = 0; i < 40; i++) { const x = rnd() * 64, y = rnd() * 64; o += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(0.35 + rnd() * 0.6).toFixed(2)}" fill="#fff" opacity="${(0.5 + rnd() * 0.5).toFixed(2)}"/>`; } return o; }
+function skyline(color, win = "#ffd98a", outline = null) { // a low, generic skyline in the top-right corner (no real buildings)
+  const b = [[34, 26, 4], [38.5, 20, 3.5], [42.5, 23, 4], [47, 14, 3.4], [51, 19, 4.5], [56, 11, 3.2], [59.5, 17, 4.5]];
+  return b.map(([x, y, wd]) => `<rect x="${x}" y="${y}" width="${wd}" height="${34 - y}" fill="${color}"${outline ? ` stroke="${outline}" stroke-width=".35"` : ""}/>`).join("")
+    + b.map(([x, y, wd]) => { seed = Math.round(x * 13); let o = ""; for (let yy = y + 2; yy < 30; yy += 2.6) for (let xx = x + 0.8; xx < x + wd - 0.8; xx += 1.4) if (rnd() > 0.55) o += `<rect x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" width=".6" height=".9" fill="${win}" opacity=".85"/>`; return o; }).join("");
+}
+const NIGHT = { side1: "#4a96f0", side2: "#1f5fb8", front1: "#2f7ae0", front2: "#174a96", roof1: "#7fb6f5", roof2: "#5a9ae8",
+  stripe: "#ffd36b", edge: "#9cc8ff", rail: "#6f7a88", tie: "#2b323d", streak: "#2f7ae0", sideDark: "#143f7e", beams: true };
+const NEON = { ...NIGHT, side1: "#14304f", side2: "#0b1a30", front1: "#173a60", front2: "#0b1e36", roof1: "#1f4c7a", roof2: "#16395e",
+  stripe: "#ff3fb4", edge: "#4ff0ff", rail: "#4ff0ff", tie: "#1a2a40", streak: "#4ff0ff", sideDark: "#0a1a2e", lit: ["#8ff7ff", "#21b8d8"] };
+// Stylized Chicago skyline (base at y = 34), drawn right-to-left behind the train:
+// a stepped tower with twin antennas, a tapered tower with twin antennas and X-bracing,
+// a tall slab and a stepped tower with a spire, plus a few lower blocks.
+function chicago(color, win, k = 1) {
+  const R = (x, y, w, h) => [x, y, w, h];
+  const blocks = [R(40, 22, 3, 12), R(43.2, 19, 2.6, 15), R(44.4, 11.5, 3.4, 22.5),   // low block, mid block, tall slab
+    R(48.6, 14, 6, 20), R(49.5, 10, 4.2, 4), R(50.2, 7, 2.8, 3),                        // stepped tower
+    R(55.2, 14, 3.6, 20), R(55.7, 11, 2.6, 3), R(56.2, 8.6, 1.6, 2.4)];                 // stepped tower with spire
+  let o = blocks.map(([x, y, w, h]) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${color}"/>`).join("");
+  o += `<rect x="50.75" y="2.6" width=".42" height="4.6" fill="${color}"/><rect x="52.05" y="3.6" width=".42" height="3.6" fill="${color}"/>`;  // twin antennas
+  o += `<rect x="56.8" y="4.4" width=".38" height="4.4" fill="${color}"/>`;                                                                // spire
+  o += `<polygon points="59.6,34 63.9,34 63.1,9 60.4,9" fill="${color}"/>`;                                                                // tapered tower
+  o += `<rect x="60.85" y="4" width=".38" height="5" fill="${color}"/><rect x="62.3" y="4" width=".38" height="5" fill="${color}"/>`;
+  for (const [y0, y1] of [[9, 16], [16, 23], [23, 30]]) o += `<path d="M60.5 ${y0}L63.2 ${y1}M63.0 ${y0}L60.3 ${y1}" stroke="${win}" stroke-width=".18" opacity=".35"/>`;
+  seed = 17;
+  for (const [x, y, w, h] of blocks.filter((b) => b[3] > 6)) {
+    for (let yy = y + 1.6; yy < 33; yy += 2.2) for (let xx = x + 0.6; xx < x + w - 0.7; xx += 1.2) if (rnd() > 0.58) o += `<rect x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" width=".55" height=".85" fill="${win}" opacity=".85"/>`;
+  }
+  for (let yy = 11; yy < 33; yy += 2.2) for (let xx = 60.8; xx < 62.9; xx += 1.1) if (rnd() > 0.6) o += `<rect x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" width=".5" height=".8" fill="${win}" opacity=".85"/>`;
+  // red beacons on the antennas
+  o += `<circle cx="50.96" cy="2.6" r=".55" fill="#ff4d4d"/><circle cx="52.26" cy="3.6" r=".5" fill="#ff4d4d"/><circle cx="61.04" cy="4" r=".5" fill="#ff4d4d"/><circle cx="62.49" cy="4" r=".5" fill="#ff4d4d"/>`;
+  return k === 1 ? o : `<g transform="translate(64 34) scale(${k}) translate(-64 -34)">${o}</g>`;
+}
+const N2 = { ...NEON, bg1: "#05030a", bg2: "#2a0b33", glow: "#c42a8f" };
+const OPTIONS = [
+  { id: "N2", name: "Before: made-up skyline", note: "N2 as you saw it, for comparison.",
+    c: { ...N2, back: skyline("#12081c", "#ffd98a") } },
+  { id: "C1", name: "Chicago skyline", note: "Stylized Chicago towers behind the train: twin-antenna stepped tower, tapered tower with X-bracing, the slab and the spire. Red lights on the antennas.",
+    c: { ...N2, back: chicago("#12081c", "#ffd98a") } },
+  { id: "C2", name: "Chicago skyline, bigger", note: "The same skyline drawn larger so the towers read better on a phone home screen.",
+    c: { ...N2, back: chicago("#12081c", "#ffd98a", 1.18) } },
+  { id: "C3", name: "Chicago skyline, lake glow", note: "Bigger skyline with a faint magenta reflection under it, like the lakefront at night.",
+    c: { ...N2, back: `<rect x="34" y="34" width="30" height="6" fill="#ff5fc0" opacity=".12"/>` + chicago("#12081c", "#ffd98a", 1.18) } },
+];
+document.getElementById("grid").innerHTML = OPTIONS.map((o) => {
+  const t = train3d(o.id, o.c);
+  return `<div class="card"><h2><b>${o.id}</b>${o.name}</h2><p>${o.note}</p>
+  <div class="big"><div class="t">${t}</div></div>
+  <div class="row">
+    <div class="home"><div class="tile">${train3d(o.id + "s", o.c)}</div><span>Next Stop</span></div>
+    <div class="small">
+      <div class="tab"><div class="fv">${train3d(o.id + "f", o.c)}</div><span>Next Stop</span></div>
+      <div class="hdr dark"><div class="mini">${train3d(o.id + "d", o.c)}</div>Next Stop</div>
+      <div class="hdr light"><div class="mini">${train3d(o.id + "l", o.c)}</div>Next Stop</div>
+    </div>
+  </div></div>`;
+}).join("");
+</script></body></html>

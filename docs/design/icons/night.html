@@ -1,0 +1,153 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Next Stop 3D icon mockups</title>
+<style>
+:root{--bg:#0f1216;--panel:#161b22;--panel2:#1d232c;--border:#2a313c;--text:#e6edf3;--muted:#8b96a5;--accent:#4ea1ff}
+body{margin:0;background:#0b0e12;color:var(--text);font:15px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:28px}
+h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 22px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px}
+.card h2{font-size:16px;margin:0 0 2px;display:flex;gap:8px;align-items:center}.card h2 b{background:var(--accent);color:#0f1216;border-radius:6px;padding:1px 7px;font-size:13px}
+.card p{color:var(--muted);font-size:13px;margin:0 0 12px;min-height:34px}
+.big{display:flex;justify-content:center;margin:4px 0 14px}.big .t{width:200px;height:200px;border-radius:44px;overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,.45)}
+.row{display:flex;gap:14px;align-items:flex-end}
+.home{background:linear-gradient(135deg,#3a4b6b,#6b4a6e 60%,#a3685a);border-radius:12px;padding:12px 14px 8px;display:flex;flex-direction:column;align-items:center;gap:5px;width:92px}
+.home .tile{width:62px;height:62px;border-radius:16px;overflow:hidden;box-shadow:0 3px 10px rgba(0,0,0,.35)}
+.home span{font-size:11px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.small{display:flex;flex-direction:column;gap:8px;flex:1}
+.tab{display:flex;align-items:center;gap:6px;background:#2b3038;border-radius:8px 8px 0 0;padding:6px 10px;font-size:12px;color:#cfd6df;width:118px}
+.tab .fv{width:16px;height:16px;border-radius:3px;overflow:hidden}
+.hdr{display:flex;align-items:center;gap:8px;border-radius:10px;padding:8px 10px;font-weight:700;font-size:15px}
+.hdr.dark{background:var(--bg);color:var(--text)}.hdr.light{background:#fff;color:#121820;border:1px solid #d8dde4}
+.hdr .mini{width:28px;height:28px;border-radius:7px;overflow:hidden;flex:none}.tab .fv{border-radius:4px}
+.note{margin-top:22px;color:var(--muted);font-size:13px}
+</style></head><body>
+<h1>Next Stop: night icon, six looks</h1>
+<p class="sub">The night icon (option I) in six looks: same train and angle, coming from the top left with its headlights on. Each is shown large, on a home screen, as a browser tab and in the header.</p>
+<div class="grid" id="grid"></div>
+<p class="note">All original drawings: a generic commuter train and a made-up skyline, no Metra or CTA livery, logos or real buildings.</p>
+<script>
+// Geometry: the train's length runs along L (toward bottom right), its width along W, height along V (up).
+const L = [1, 0.6], W = [0.55, -0.35], V = [0, -1];
+const add = (p, v, k = 1) => [p[0] + v[0] * k, p[1] + v[1] * k];
+const pts = (a) => a.map((p) => p.map((n) => n.toFixed(2)).join(",")).join(" ");
+const D = [40, 56];                     // front, bottom, near corner
+const w = 22, h = 22, len = 46;
+const C = add(D, W, w), A = add(D, V, h), B = add(C, V, h);           // front face: D C B A
+const E = add(D, L, -len), F = add(E, V, h), G = add(F, W, w);        // back of the train (off the tile)
+const onFront = (u, v) => add(add(D, W, w * u), V, h * v);
+const onSide = (s, v) => add(add(D, L, -len * s), V, h * v);
+const quad = (f, a, b, c, d) => pts([f(a[0], a[1]), f(b[0], b[1]), f(c[0], c[1]), f(d[0], d[1])]);
+const box = (f, u0, u1, v0, v1) => quad(f, [u0, v0], [u1, v0], [u1, v1], [u0, v1]);
+
+function train3d(id, c) {
+  const g = (n) => `${id}-${n}`;
+  // windows along the side (3 visible, receding)
+  const wins = [[0.06, 0.2], [0.26, 0.4], [0.46, 0.6]].map(([a, b]) => `<polygon points="${box(onSide, a, b, 0.52, 0.84)}" fill="url(#${g("glass")})"/>`).join("");
+  const doors = [[0.215, 0.245]].map(([a, b]) => `<polygon points="${box(onSide, a, b, 0.08, 0.84)}" fill="${c.sideDark}" opacity=".5"/>`).join("");
+  // rails and ties, extending ahead of the train
+  const r1a = add(add(D, L, -len), [0, 3]), r1b = add(add(D, L, 16), [0, 3]);
+  const r2a = add(r1a, W, w), r2b = add(r1b, W, w);
+  let ties = "";
+  for (let k = -len; k <= 16; k += 5.5) { const p = add(add(D, L, k), [0, 3.6]); const q = add(p, W, w); ties += `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${c.tie}" stroke-width="1.6" stroke-linecap="round"/>`; }
+  const streaks = [[-6, 10, 18], [-2, 20, 12], [4, 2, 14], [8, 14, 9]].map(([ox, oy, l]) => {
+    const p = [ox, oy], q = add(p, L, l); return `<line x1="${p[0]}" y1="${p[1]}" x2="${q[0]}" y2="${q[1]}" stroke="${c.streak}" stroke-width="2" stroke-linecap="round" opacity=".55"/>`; }).join("");
+  const hl = (u) => onFront(u, 0.22);
+  const beams = c.beams ? `<polygon points="${pts([add(hl(0.18), [0, -1.5]), [66, 66], [44, 72], add(hl(0.18), [0, 1.5])])}" fill="url(#${g("beam")})" filter="url(#${g("soft")})"/>
+      <polygon points="${pts([add(hl(0.82), [0, -1.5]), [72, 54], [70, 70], add(hl(0.82), [0, 1.5])])}" fill="url(#${g("beam")})" filter="url(#${g("soft")})"/>` : "";
+  return `<svg viewBox="0 0 64 64" width="100%" height="100%">
+  <defs>
+    <linearGradient id="${g("bg")}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c.bg1}"/><stop offset="1" stop-color="${c.bg2}"/></linearGradient>
+    <linearGradient id="${g("side")}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c.side1}"/><stop offset="1" stop-color="${c.side2}"/></linearGradient>
+    <linearGradient id="${g("front")}" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${c.front1}"/><stop offset="1" stop-color="${c.front2}"/></linearGradient>
+    <linearGradient id="${g("roof")}" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="${c.roof1}"/><stop offset="1" stop-color="${c.roof2}"/></linearGradient>
+    ${c.lit ? `<linearGradient id="${g("glass")}" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="${c.lit[0]}"/><stop offset="1" stop-color="${c.lit[1]}"/></linearGradient>`
+        : `<linearGradient id="${g("glass")}" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="#9fb4cc"/><stop offset=".35" stop-color="#2a3442"/><stop offset="1" stop-color="#0d1117"/></linearGradient>`}
+    <linearGradient id="${g("cab")}" x1="0" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="#9fb4cc"/><stop offset=".35" stop-color="#2a3442"/><stop offset="1" stop-color="#0d1117"/></linearGradient>
+    <radialGradient id="${g("sky")}" cx=".85" cy=".15" r=".6"><stop offset="0" stop-color="${c.glow || c.bg2}" stop-opacity=".9"/><stop offset="1" stop-color="${c.glow || c.bg2}" stop-opacity="0"/></radialGradient>
+    <linearGradient id="${g("fade")}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${c.bg1}" stop-opacity="1"/><stop offset=".35" stop-color="${c.bg1}" stop-opacity="0"/></linearGradient>
+    <radialGradient id="${g("lamp")}"><stop offset="0" stop-color="#fffbe8"/><stop offset=".45" stop-color="#ffe9a3"/><stop offset="1" stop-color="#ffd36b" stop-opacity="0"/></radialGradient>
+    <linearGradient id="${g("beam")}" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff3c4" stop-opacity=".32"/><stop offset="1" stop-color="#fff3c4" stop-opacity="0"/></linearGradient>
+    <filter id="${g("soft")}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.4"/></filter>
+    <filter id="${g("blur")}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+  </defs>
+  <rect width="64" height="64" fill="url(#${g("bg")})"/>
+  ${c.glow ? `<rect width="64" height="64" fill="url(#${g("sky")})"/>` : ""}
+  ${c.back || ""}
+  ${streaks}
+  <g opacity=".9"><line x1="${r1a[0]}" y1="${r1a[1]}" x2="${r1b[0]}" y2="${r1b[1]}" stroke="${c.rail}" stroke-width="1.3"/>${ties}
+    <line x1="${r2a[0]}" y1="${r2a[1]}" x2="${r2b[0]}" y2="${r2b[1]}" stroke="${c.rail}" stroke-width="1.3"/></g>
+  <polygon points="${pts([add(D, [0, 4]), add(C, [0, 4]), add(add(C, L, -len), [0, 4]), add(E, [0, 4])])}" fill="#000" opacity=".45" filter="url(#${g("blur")})"/>
+  ${beams}
+  <polygon points="${pts([D, E, F, A])}" fill="url(#${g("side")})"/>
+  <polygon points="${box(onSide, 0, 1, 0.3, 0.4)}" fill="${c.stripe}"/>
+  ${doors}${wins}
+  <polygon points="${pts([A, F, G, B])}" fill="url(#${g("roof")})"/>
+  <polygon points="${pts([D, C, B, A])}" fill="url(#${g("front")})"/>
+  <polygon points="${box(onFront, 0, 1, 0.3, 0.4)}" fill="${c.stripe}"/>
+  <polygon points="${box(onFront, 0.12, 0.88, 0.52, 0.86)}" fill="url(#${g("cab")})"/>
+  <polygon points="${quad(onFront, [0.18, 0.84], [0.46, 0.84], [0.3, 0.58], [0.16, 0.58])}" fill="#fff" opacity=".18"/>
+  <line x1="${A[0]}" y1="${A[1]}" x2="${B[0]}" y2="${B[1]}" stroke="${c.edge}" stroke-width=".8" opacity=".9"/>
+  <line x1="${A[0]}" y1="${A[1]}" x2="${D[0]}" y2="${D[1]}" stroke="${c.edge}" stroke-width=".8" opacity=".6"/>
+  <circle cx="${hl(0.18)[0]}" cy="${hl(0.18)[1]}" r="3.6" fill="url(#${g("lamp")})"/><circle cx="${hl(0.82)[0]}" cy="${hl(0.82)[1]}" r="3.6" fill="url(#${g("lamp")})"/>
+  <polygon points="${box(onFront, 0.38, 0.62, 0.06, 0.14)}" fill="#0d1117" opacity=".7"/>
+  ${c.roofSnow ? `<polygon points="${pts([add(A, [0, 0.6]), add(F, [0, 0.6]), add(G, [0, -0.6]), add(B, [0, -0.6])])}" fill="#f4f8ff" opacity=".95"/><polygon points="${pts([A, F, add(F, [0, 2.2]), add(A, [0, 1.6])])}" fill="#f4f8ff"/>` : ""}
+  ${c.front_ || ""}
+  <rect width="64" height="64" fill="url(#${g("fade")})"/>
+</svg>`;
+}
+// Flat version of the same angle, one colour (+ lighter side), for 16-26 px.
+function flat(color, side, cut) {
+  return `<svg viewBox="2 4 60 58"><polygon points="${pts([D, add(D, L, -30), add(add(D, L, -30), V, h), A])}" fill="${side}"/>
+    <polygon points="${pts([D, C, B, A])}" fill="${color}"/>
+    <polygon points="${box(onFront, 0.14, 0.86, 0.52, 0.84)}" fill="${cut}"/>
+    <polygon points="${box(onSide, 0.1, 0.32, 0.52, 0.84)}" fill="${cut}"/><polygon points="${box(onSide, 0.42, 0.64, 0.52, 0.84)}" fill="${cut}"/>
+    <circle cx="${onFront(0.2, 0.22)[0]}" cy="${onFront(0.2, 0.22)[1]}" r="2.4" fill="${cut}"/><circle cx="${onFront(0.8, 0.22)[0]}" cy="${onFront(0.8, 0.22)[1]}" r="2.4" fill="${cut}"/>
+    <line x1="${add(D, L, -32)[0]}" y1="${add(D, L, -32)[1] + 4}" x2="${add(D, L, 8)[0]}" y2="${add(D, L, 8)[1] + 4}" stroke="${color}" stroke-width="2.4" stroke-linecap="round"/></svg>`;
+}
+
+// Deterministic "random" so every size draws the same scenery.
+let seed = 7; const rnd = () => (seed = (seed * 9301 + 49297) % 233280) / 233280;
+function stars(n, color = "#fff") { seed = 11; let o = ""; for (let i = 0; i < n; i++) { const x = rnd() * 64, y = rnd() * 30; if (x > 30 && y > 18) continue; o += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(0.25 + rnd() * 0.5).toFixed(2)}" fill="${color}" opacity="${(0.4 + rnd() * 0.6).toFixed(2)}"/>`; } return o; }
+function rain() { seed = 3; let o = ""; for (let i = 0; i < 34; i++) { const x = rnd() * 70 - 4, y = rnd() * 64; o += `<line x1="${x.toFixed(1)}" y1="${y.toFixed(1)}" x2="${(x - 1.2).toFixed(1)}" y2="${(y + 4.5).toFixed(1)}" stroke="#9fc4ff" stroke-width=".45" opacity=".5"/>`; } return o; }
+function snow() { seed = 5; let o = ""; for (let i = 0; i < 40; i++) { const x = rnd() * 64, y = rnd() * 64; o += `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${(0.35 + rnd() * 0.6).toFixed(2)}" fill="#fff" opacity="${(0.5 + rnd() * 0.5).toFixed(2)}"/>`; } return o; }
+function skyline(color) { // a low, generic skyline in the top-right corner (no real buildings)
+  const b = [[34, 26, 4], [38.5, 20, 3.5], [42.5, 23, 4], [47, 14, 3.4], [51, 19, 4.5], [56, 11, 3.2], [59.5, 17, 4.5]];
+  return b.map(([x, y, wd]) => `<rect x="${x}" y="${y}" width="${wd}" height="${34 - y}" fill="${color}"/>`).join("")
+    + b.map(([x, y, wd]) => { seed = Math.round(x * 13); let o = ""; for (let yy = y + 2; yy < 30; yy += 2.6) for (let xx = x + 0.8; xx < x + wd - 0.8; xx += 1.4) if (rnd() > 0.55) o += `<rect x="${xx.toFixed(1)}" y="${yy.toFixed(1)}" width=".6" height=".9" fill="#ffd98a" opacity=".8"/>`; return o; }).join("");
+}
+const NIGHT = { side1: "#4a96f0", side2: "#1f5fb8", front1: "#2f7ae0", front2: "#174a96", roof1: "#7fb6f5", roof2: "#5a9ae8",
+  stripe: "#ffd36b", edge: "#9cc8ff", rail: "#6f7a88", tie: "#2b323d", streak: "#2f7ae0", sideDark: "#143f7e", beams: true };
+const OPTIONS = [
+  { id: "I1", name: "Night, starry", note: "The night version from before with lit windows and a few stars.",
+    c: { ...NIGHT, bg1: "#05070a", bg2: "#121a26", lit: ["#ffe9a8", "#f0b44a"], back: stars(26) } },
+  { id: "I2", name: "Dusk", note: "Purple-to-orange evening sky, silver train with warm lit windows. The softest and most colourful.",
+    c: { ...NIGHT, bg1: "#2a1f4a", bg2: "#e07a4f", glow: "#ffb070", side1: "#eef2f8", side2: "#aab6c6", front1: "#d9e1ec", front2: "#8e9db2",
+         roof1: "#ffffff", roof2: "#e3e9f2", stripe: "#3b4fd6", edge: "#ffffff", rail: "#3a2c4a", tie: "#4b3a5a", streak: "#ffd0a8", sideDark: "#7d8ba0",
+         lit: ["#fff1c2", "#f6b25a"], back: stars(10, "#ffe7d0") } },
+  { id: "I3", name: "City lights", note: "Deep blue night with a small made-up skyline behind the train. Says “Chicago commute” without any real landmark.",
+    c: { ...NIGHT, bg1: "#060a14", bg2: "#14233f", glow: "#2a4c8a", lit: ["#ffe9a8", "#f0b44a"], back: skyline("#0b1428") } },
+  { id: "I4", name: "Neon", note: "Black tile, glowing cyan edges and a magenta stripe. The most modern and punchy.",
+    c: { ...NIGHT, bg1: "#020306", bg2: "#0d0a1c", glow: "#3a1d6e", side1: "#14304f", side2: "#0b1a30", front1: "#173a60", front2: "#0b1e36",
+         roof1: "#1f4c7a", roof2: "#16395e", stripe: "#ff3fb4", edge: "#4ff0ff", rail: "#4ff0ff", tie: "#1a2a40", streak: "#4ff0ff", sideDark: "#0a1a2e",
+         lit: ["#8ff7ff", "#21b8d8"] } },
+  { id: "I5", name: "Rainy night", note: "Rain streaks and wet, shiny rails. Moody, and still reads clearly when small.",
+    c: { ...NIGHT, bg1: "#060a10", bg2: "#1a2636", glow: "#22344d", rail: "#a9c7ee", tie: "#26303c", lit: ["#ffe9a8", "#f0b44a"],
+         front_: rain() } },
+  { id: "I6", name: "Snowy night", note: "Chicago winter: snow on the roof and falling snow. A red train so it pops against the white.",
+    c: { ...NIGHT, bg1: "#0a1220", bg2: "#2a3b55", glow: "#3d5578", side1: "#e5484d", side2: "#a81f2a", front1: "#cf333c", front2: "#86141f",
+         roof1: "#ff8a8f", roof2: "#ef5a60", stripe: "#f4f8ff", edge: "#ffd0d2", rail: "#c9d6e8", tie: "#3a4a60", streak: "#c9d6e8", sideDark: "#7a1018",
+         lit: ["#fff1c2", "#f6b25a"], roofSnow: true, front_: snow() } },
+];
+document.getElementById("grid").innerHTML = OPTIONS.map((o) => {
+  const t = train3d(o.id, o.c);
+  return `<div class="card"><h2><b>${o.id}</b>${o.name}</h2><p>${o.note}</p>
+  <div class="big"><div class="t">${t}</div></div>
+  <div class="row">
+    <div class="home"><div class="tile">${train3d(o.id + "s", o.c)}</div><span>Next Stop</span></div>
+    <div class="small">
+      <div class="tab"><div class="fv">${train3d(o.id + "f", o.c)}</div><span>Next Stop</span></div>
+      <div class="hdr dark"><div class="mini">${train3d(o.id + "d", o.c)}</div>Next Stop</div>
+      <div class="hdr light"><div class="mini">${train3d(o.id + "l", o.c)}</div>Next Stop</div>
+    </div>
+  </div></div>`;
+}).join("");
+</script></body></html>

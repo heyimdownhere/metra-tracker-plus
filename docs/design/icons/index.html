@@ -1,0 +1,95 @@
+<!doctype html><html><head><meta charset="utf-8"><title>Next Stop icon mockups</title>
+<style>
+:root{--bg:#0f1216;--panel:#161b22;--panel2:#1d232c;--border:#2a313c;--text:#e6edf3;--muted:#8b96a5;--accent:#4ea1ff}
+body{margin:0;background:#0b0e12;color:var(--text);font:15px system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;padding:28px}
+h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 22px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.card{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:16px}
+.card h2{font-size:16px;margin:0 0 2px;display:flex;gap:8px;align-items:center}.card h2 b{background:var(--accent);color:#0f1216;border-radius:6px;padding:1px 7px;font-size:13px}
+.card p{color:var(--muted);font-size:13px;margin:0 0 12px;min-height:34px}
+.row{display:flex;gap:14px;align-items:flex-end}
+.home{background:linear-gradient(135deg,#3a4b6b,#6b4a6e 60%,#a3685a);border-radius:12px;padding:12px 14px 8px;display:flex;flex-direction:column;align-items:center;gap:5px;width:92px}
+.home .tile{width:62px;height:62px;border-radius:16px;overflow:hidden;box-shadow:0 3px 10px rgba(0,0,0,.35)}
+.home span{font-size:11px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5)}
+.tab{display:flex;align-items:center;gap:6px;background:#2b3038;border-radius:8px 8px 0 0;padding:6px 10px;font-size:12px;color:#cfd6df;width:118px}
+.tab svg{width:16px;height:16px;border-radius:3px}
+.small{display:flex;flex-direction:column;gap:8px;flex:1}
+.hdr{display:flex;align-items:center;gap:8px;border-radius:10px;padding:8px 10px;font-weight:700;font-size:15px}
+.hdr.dark{background:var(--bg);color:var(--text)}.hdr.light{background:#fff;color:#121820;border:1px solid #d8dde4}
+.hdr svg{width:24px;height:24px}
+.hdr.dark .g{fill:#4ea1ff}.hdr.light .g{fill:#0b6bd3}
+.hdr.dark .k{fill:#0f1216}.hdr.light .k{fill:#fff}
+.hdr.dark .s{stroke:#4ea1ff}.hdr.light .s{stroke:#0b6bd3}
+.hdr.dark .w{fill:#e6edf3}.hdr.light .w{fill:#121820}
+.section{margin-top:28px}
+.sw{display:inline-flex;gap:2px;padding:3px;border-radius:10px;background:var(--panel2);border:1px solid var(--border);margin-right:18px}
+.sw span{display:flex;align-items:center;gap:6px;color:var(--muted);font-weight:700;font-size:13px;padding:5px 11px;border-radius:7px}
+.sw span.on{background:var(--panel);color:var(--text);box-shadow:0 1px 3px rgba(0,0,0,.18)}
+.sw svg{width:18px;height:18px;fill:currentColor}
+.swrow{display:flex;align-items:center;gap:10px;margin:10px 0}
+.swrow em{color:var(--muted);font-size:13px;font-style:normal;width:170px}
+.glyphs{display:flex;gap:26px;margin-top:12px}.glyphs div{display:flex;flex-direction:column;align-items:center;gap:6px;color:var(--muted);font-size:12px}
+.glyphs svg{width:40px;height:40px;fill:var(--text)}
+</style></head><body>
+<h1>Next Stop: icon mockups</h1>
+<p class="sub">Original drawings, no Metra or CTA marks. Each is shown as a home-screen tile, a browser tab and the header logo (dark and light).</p>
+<div class="grid" id="grid"></div>
+
+<div class="section card">
+  <h2>Switch symbols (optional)</h2>
+  <p>Small symbols that could sit next to the words in the Metra | CTA switch: a two-level commuter car for Metra and an elevated train on its girder for the L.</p>
+  <div class="swrow"><em>Words only (today)</em><div class="sw"><span>Metra</span><span class="on">CTA</span></div></div>
+  <div class="swrow"><em>Symbol + word</em><div class="sw"><span><svg viewBox="0 0 24 24" id="g-metra"></svg>Metra</span><span class="on"><svg viewBox="0 0 24 24" id="g-l"></svg>CTA</span></div></div>
+  <div class="swrow"><em>Symbols only (smallest)</em><div class="sw"><span title="Metra"><svg viewBox="0 0 24 24" class="gm"></svg></span><span class="on" title="CTA"><svg viewBox="0 0 24 24" class="gl"></svg></span></div></div>
+  <div class="glyphs"><div><svg viewBox="0 0 24 24" class="gm"></svg>Metra: commuter car</div><div><svg viewBox="0 0 24 24" class="gl"></svg>CTA: elevated train</div></div>
+</div>
+
+<script>
+// Each icon: a 64x64 drawing. Classes: g = accent, k = background, w = text colour, s = accent stroke.
+const ICONS = [
+ { id:"A", name:"Current", note:"Today's icon: a generic train front. Reads a little like a bus at small sizes.",
+   svg:`<path class="g" d="M21 8h22a9 9 0 0 1 9 9v22a9 9 0 0 1-8 9l4 6.2a2.3 2.3 0 1 1-3.9 2.6L39.6 49H24.4l-4.5 7.8a2.3 2.3 0 1 1-3.9-2.6l4-6.2a9 9 0 0 1-8-9V17a9 9 0 0 1 9-9Zm-3 10v11h28V18H18Zm4 17.5a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Zm20 0a3.4 3.4 0 1 0 0 6.8 3.4 3.4 0 0 0 0-6.8Z"/>` },
+ { id:"B", name:"Side view", note:"A commuter train from the side with speed lines. Clearly a train, not a bus.",
+   svg:`<path class="g" d="M12 20h30c9 0 15.5 6.5 17 15v5a4 4 0 0 1-4 4H12a4 4 0 0 1-4-4V24a4 4 0 0 1 4-4Z"/>
+        <rect class="k" x="13" y="25" width="8" height="7" rx="1.5"/><rect class="k" x="24" y="25" width="8" height="7" rx="1.5"/><rect class="k" x="35" y="25" width="8" height="7" rx="1.5"/>
+        <path class="k" d="M46 25h1.5c4 0 7 3 8 7H46z"/><rect class="k" x="8" y="36" width="51" height="2"/>
+        <circle class="g" cx="18" cy="48" r="3.5"/><circle class="g" cx="28" cy="48" r="3.5"/><circle class="g" cx="42" cy="48" r="3.5"/><circle class="g" cx="52" cy="48" r="3.5"/>
+        <rect class="g" x="4" y="53" width="58" height="2.5" rx="1.2"/>
+        <rect class="g" x="1" y="24" width="5" height="2" rx="1" opacity=".55"/><rect class="g" x="0" y="30" width="6" height="2" rx="1" opacity=".35"/>` },
+ { id:"C", name:"Next-stop pin", note:"A map pin with a train inside: “where's my next stop”. Matches the app's name.",
+   svg:`<path class="g" d="M32 3C19.3 3 10 12.4 10 25c0 15.7 19.6 34 20.4 34.8a2.3 2.3 0 0 0 3.2 0C34.4 59 54 40.7 54 25 54 12.4 44.7 3 32 3Z"/>
+        <rect class="k" x="21" y="13" width="22" height="22" rx="5"/><rect class="g" x="24.5" y="16.5" width="15" height="7" rx="2"/>
+        <circle class="g" cx="26.5" cy="29.5" r="2"/><circle class="g" cx="37.5" cy="29.5" r="2"/>
+        <path class="k" d="m24 38 3-3h10l3 3z"/>` },
+ { id:"D", name:"Line map", note:"Transit-map style: a coloured line, stations, and a ring on the next stop. Most abstract.",
+   svg:`<path class="s" d="M9 52c14 0 14-20 23-20s9-20 23-20" fill="none" stroke-width="7" stroke-linecap="round"/>
+        <circle class="w" cx="9" cy="52" r="5.5"/><circle class="k" cx="9" cy="52" r="2.6"/>
+        <circle class="w" cx="32" cy="32" r="5.5"/><circle class="k" cx="32" cy="32" r="2.6"/>
+        <circle class="s" cx="55" cy="12" r="8.5" fill="none" stroke-width="2.5" opacity=".55"/><circle class="w" cx="55" cy="12" r="5.5"/><circle class="g" cx="55" cy="12" r="2.6"/>` },
+ { id:"E", name:"Two-level car", note:"Front of a double-decker commuter car with two rows of windows. Distinctly “commuter rail”.",
+   svg:`<path class="g" d="M20 6h24a10 10 0 0 1 10 10v31a6 6 0 0 1-6 6H16a6 6 0 0 1-6-6V16A10 10 0 0 1 20 6Z"/>
+        <rect class="k" x="15" y="13" width="34" height="9" rx="2.5"/><rect class="k" x="15" y="26" width="34" height="9" rx="2.5"/>
+        <circle class="k" cx="20" cy="44" r="3"/><circle class="k" cx="44" cy="44" r="3"/><rect class="k" x="28" y="42" width="8" height="4" rx="1.5"/>
+        <path class="g" d="M14 58h36" stroke="currentColor"/><rect class="g" x="13" y="56.5" width="38" height="3" rx="1.5"/>` },
+ { id:"F", name:"Train + arrow", note:"Train front with a “next” arrow. Says “what's coming next” at a glance.",
+   svg:`<path class="g" d="M13 10h18a8 8 0 0 1 8 8v20a8 8 0 0 1-7 7.9l3.4 5.3a2 2 0 1 1-3.4 2.2L28.2 46h-12l-3.8 7.4a2 2 0 1 1-3.4-2.2l3.4-5.3A8 8 0 0 1 5 38V18a8 8 0 0 1 8-8Zm-3 9v9h24v-9H10Zm4 13.5a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm16 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/>
+        <path class="w" d="M45 19.5a2.5 2.5 0 0 1 3.5 0l10 10a2.5 2.5 0 0 1 0 3.5l-10 10a2.5 2.5 0 1 1-3.5-3.5l8.2-8.2-8.2-8.3a2.5 2.5 0 0 1 0-3.5Z"/>` },
+];
+const tile = (ic, dark=true) => `<svg viewBox="0 0 64 64" width="100%" height="100%"><rect width="64" height="64" fill="${dark?"#0f1216":"#ffffff"}"/>
+  <g transform="translate(6 6) scale(.8125)" style="--x:0">${ic.svg.replace(/class="g"/g,`fill="${dark?"#4ea1ff":"#0b6bd3"}"`).replace(/class="k"/g,`fill="${dark?"#0f1216":"#ffffff"}"`).replace(/class="w"/g,`fill="${dark?"#e6edf3":"#121820"}"`).replace(/class="s"/g,`stroke="${dark?"#4ea1ff":"#0b6bd3"}"`)}</g></svg>`;
+document.getElementById("grid").innerHTML = ICONS.map((ic) => `<div class="card">
+  <h2><b>${ic.id}</b>${ic.name}</h2><p>${ic.note}</p>
+  <div class="row">
+    <div class="home"><div class="tile">${tile(ic)}</div><span>Next Stop</span></div>
+    <div class="small">
+      <div class="tab">${tile(ic).replace('<svg ','<svg width="16" height="16" ')}<span>Next Stop</span></div>
+      <div class="hdr dark"><svg viewBox="0 0 64 64">${ic.svg}</svg>Next Stop</div>
+      <div class="hdr light"><svg viewBox="0 0 64 64">${ic.svg}</svg>Next Stop</div>
+    </div>
+  </div></div>`).join("");
+// Switch glyphs (24x24, single colour).
+const METRA = `<path d="M5 4h14a3 3 0 0 1 3 3v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V7a3 3 0 0 1 3-3Zm0 3v3h3V7H5Zm5 0v3h4V7h-4Zm6 0v3h3V7h-3ZM5 11.5V13h14v-1.5H5Z"/><circle cx="6.5" cy="20" r="1.7"/><circle cx="17.5" cy="20" r="1.7"/>`;
+const ELEV = `<path d="M5 2.5h14a3 3 0 0 1 3 3V12a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5.5a3 3 0 0 1 3-3ZM5 5.5V9h4V5.5H5Zm5.5 0V9h3V5.5h-3Zm4.5 0V9h4V5.5h-4Z"/><path d="M1 15.5h22V18H1z"/><path d="M4 18h2.2l-1.6 5H2.4L4 18Zm13.8 0H20l1.6 5h-2.2l-1.6-5ZM10.9 18h2.2v5h-2.2z"/>`;
+document.querySelectorAll("#g-metra,.gm").forEach((e) => e.innerHTML = METRA);
+document.querySelectorAll("#g-l,.gl").forEach((e) => e.innerHTML = ELEV);
+</script></body></html>
