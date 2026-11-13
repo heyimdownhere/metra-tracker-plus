@@ -212,6 +212,19 @@
     </form>
   </dialog>
 
+  <div id="trip-sheet" class="trip-sheet" hidden>
+    <div class="ts-scrim" id="ts-scrim"></div>
+    <section class="ts-panel" id="ts-panel" role="dialog" aria-modal="true" aria-labelledby="ts-title">
+      <div class="ts-drag" id="ts-drag">
+        <div class="ts-grab" aria-hidden="true"></div>
+        <button type="button" class="ts-x" id="ts-x" aria-label="Close">✕</button>
+        <div class="ts-head" id="ts-head"></div>
+      </div>
+      <div class="ts-scroll" id="ts-scroll"><ol class="ts-tl" id="ts-tl"></ol></div>
+      <button type="button" class="ts-more" id="ts-more" hidden></button>
+    </section>
+  </div>
+
   <section id="settings-page" class="settings-page" aria-labelledby="settings-title" hidden>
     <div class="settings-inner">
     <div class="settings-head">

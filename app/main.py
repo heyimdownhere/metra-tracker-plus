@@ -215,6 +215,17 @@ def line(
         raise HTTPException(404, f"Unknown line {exc.args[0]!r}")
 
 
+@app.get("/api/trip")
+def trip(trip_id: str = Query(..., min_length=1)):
+    """One train's every stop with scheduled and expected times, and where it is if running."""
+    if tracker.static is None:
+        raise HTTPException(503, "Schedule not loaded yet")
+    try:
+        return _json(tracker.trip_detail(trip_id))
+    except KeyError:
+        raise HTTPException(404, f"Unknown train {trip_id!r}")
+
+
 @app.get("/api/timetable")
 def timetable(
     station: str = Query(..., min_length=1),
