@@ -302,6 +302,8 @@
     return hit;
   }
   const narrow = () => matchMedia("(max-width: 820px)").matches;
+  // Scrolling after a tap waits for the double-tap window (a double-tap opens the train's stops).
+  function deferScroll(fn) { clearTimeout(deferScroll.t); deferScroll.t = setTimeout(fn, 330); }
   function pickBoardTrain(li) {
     if (mapHidden()) return;
     const trip = li.dataset.trip;
@@ -319,8 +321,9 @@
       note.textContent = "That train isn't running yet; its line is highlighted";
       note.hidden = false;
     }
-    // On phones the map is below the board: bring it into view.
-    if (narrow()) $("map").scrollIntoView({ behavior: "smooth", block: "center" });
+    // On phones the map is below the board: bring it into view (after a beat, so a
+    // second tap can still land on the same row and open its stops instead).
+    if (narrow()) deferScroll(() => $("map").scrollIntoView({ behavior: "smooth", block: "center" }));
   }
   $("board-list").addEventListener("click", (e) => {
     if (e.target.closest("a, button")) return;
@@ -1166,6 +1169,199 @@
     if (state.selectedTrip && !mapHidden()) mapView.selectTrip(state.selectedTrip, b.dataset.route);
     window.scrollTo({ top: $("board-title").getBoundingClientRect().top + window.scrollY - 12, behavior: "smooth" });
   }, true);
+
+  // ---------- train detail sheet (double-tap any train) ----------
+  // Opens half-height: a summary and the timeline around the train; drag up for every stop.
+  const sheet = { trip: null, mode: "closed", data: null, timer: null, firstRender: false };
+  const SHEET = { half: () => Math.round(window.innerHeight * 0.46), full: () => 0 };
+  function sheetY(mode) { return mode === "full" ? SHEET.full() : mode === "half" ? SHEET.half() : window.innerHeight; }
+  function setSheetMode(mode, { animate = true } = {}) {
+    const panel = $("ts-panel");
+    sheet.mode = mode;
+    panel.style.transition = animate && !reduceMotion() ? "" : "none";
+    panel.style.transform = `translateY(${sheetY(mode)}px)`;
+    panel.style.setProperty("--sheet-off", `${mode === "half" ? SHEET.half() : 0}px`);
+    $("trip-sheet").classList.toggle("is-full", mode === "full");
+    $("ts-scrim").style.opacity = mode === "closed" ? "0" : "1";
+    renderSheetMore();
+  }
+  async function openTrip(tripId) {
+    if (!tripId) return;
+    clearTimeout(deferScroll.t);  // a double-tap: stay where you are
+    sheet.trip = tripId;
+    sheet.firstRender = true;
+    if (sheet.data && sheet.data.trip_id === tripId) renderTrip(sheet.data);  // seen it: show it now, refresh below
+    else { sheet.data = null; $("ts-head").innerHTML = '<p class="muted">Loading…</p>'; $("ts-tl").innerHTML = ""; }
+    const wrap = $("trip-sheet");
+    if (wrap.hidden) {
+      wrap.hidden = false;
+      document.body.classList.add("sheet-open");
+      setSheetMode("closed", { animate: false });
+      void $("ts-panel").offsetWidth;
+      requestAnimationFrame(() => setSheetMode("half"));
+      if (location.hash !== "#train") history.pushState({ sheet: 1 }, "", "#train");
+    }
+    clearInterval(sheet.timer);
+    sheet.timer = setInterval(loadTrip, 30000);
+    await loadTrip();
+  }
+  async function loadTrip() {
+    const id = sheet.trip;
+    if (!id) return;
+    let d;
+    try { d = await api(`/api/trip?trip_id=${encodeURIComponent(id)}`); } catch (e) {
+      if (sheet.firstRender) $("ts-head").innerHTML = '<p class="muted">Couldn\'t load this train.</p>';
+      return;
+    }
+    if (sheet.trip !== id) return;
+    sheet.data = d;
+    renderTrip(d);
+  }
+  function closeTrip(fromHistory) {
+    if ($("trip-sheet").hidden || sheet.mode === "closed") return;
+    clearInterval(sheet.timer);
+    sheet.trip = null;
+    setSheetMode("closed");
+    const done = () => { $("trip-sheet").hidden = true; document.body.classList.remove("sheet-open"); };
+    if (reduceMotion()) done(); else setTimeout(done, 480);
+    if (!fromHistory && location.hash === "#train") history.back();
+  }
+  window.addEventListener("popstate", () => { if (location.hash !== "#train") closeTrip(true); });
+  $("ts-x").addEventListener("click", () => closeTrip());
+  $("ts-scrim").addEventListener("click", () => closeTrip());
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && sheet.trip) closeTrip(); });
+  $("ts-more").addEventListener("click", () => setSheetMode("full"));
+  function renderSheetMore() {
+    const b = $("ts-more"), d = sheet.data;
+    b.hidden = sheet.mode !== "half" || !d;
+    if (d) b.textContent = `⌃ Drag up for all ${d.stops.length} stops`;
+  }
+
+  function renderTrip(d) {
+    const now = serverNow();
+    const stops = d.stops;
+    const ni = d.next_index;
+    const last = stops[stops.length - 1];
+    const minsTo = (t) => Math.max(0, Math.round((t - now) / 60));
+    const inText = (t) => (minsTo(t) < 1 ? "Now" : untilText(minsTo(t)));
+    const status = d.cancelled ? '<span class="badge cancel">Cancelled</span>'
+      : (d.live || d.tracking) && d.delay != null ? delayHtml(d.delay, d.tracking) : '<span class="muted">Scheduled</span>';
+    const cell = (label, value) => `<div><span class="ts-k">${esc(label)}</span><b>${value}</b></div>`;
+    let cells;
+    if (d.running && ni != null) {
+      cells = [cell("Next stop", esc(stops[ni].name)), cell("In", inText(stops[ni].time)),
+        cell("Status", status), cell("Arrives", esc(fmtTime(last.time)))];
+    } else if (!d.running && last.time < now) {
+      cells = [cell("Arrived", esc(last.name)), cell("At", esc(fmtTime(last.time))), cell("Status", status), cell("", "")];
+    } else {
+      cells = [cell(`Leaves ${stops[0].name}`, esc(fmtTime(stops[0].time))), cell("In", inText(stops[0].time)),
+        cell("Status", status), cell("Arrives", esc(fmtTime(last.time)))];
+    }
+    const pill = d.live ? '<span class="ts-live">Live</span>' : d.tracking ? '<span class="ts-live gps">GPS</span>' : "";
+    $("ts-head").innerHTML = `<div class="ts-title">${chip(d.route_short, d.color, d.text_color)}
+        <b id="ts-title">${d.train ? `#${esc(d.train)} ` : ""}to ${esc(d.destination || last.name)}</b>${pill}</div>
+      <div class="ts-sum">${cells.join("")}</div>`;
+    const home = state.home || {};
+    const tag = (st) => st.station_id && st.station_id === home.home_station ? '<span class="ts-tag home">Home</span>'
+      : st.station_id && st.station_id === home.work_station ? '<span class="ts-tag work">Work</span>' : "";
+    // Times on the timeline without AM/PM (the summary above has them), like a printed timetable.
+    const hm = (t) => fmtTime(t).replace(/\s?[AP]\.?M\.?$/i, "");
+    const tc = (sch, est) => (!sch || hm(sch) === hm(est) ? `<b>${esc(hm(est))}</b>` : `<s class="was">${esc(hm(sch))}</s> <b>${esc(hm(est))}</b>`);
+    const rows = [];
+    stops.forEach((st, i) => {
+      const cls = [st.passed ? "passed" : "", i === ni ? "next" : "", tag(st) ? "mine" : "", st.skipped ? "skipped" : ""].filter(Boolean).join(" ");
+      const t = st.skipped ? '<span class="muted">Skipped</span>'
+        : st.passed ? `<span class="muted">${esc(hm(st.time))}</span>` : tc(st.scheduled, st.time);
+      rows.push(`<li class="ts-st ${cls}"><span class="ts-dot"></span><span class="ts-nm">${esc(st.name)}${tag(st)}</span><span class="ts-t">${t}</span></li>`);
+      if (d.running && ni != null && i === ni - 1) {
+        const age = d.position_at ? Math.max(0, Math.round(now - d.position_at)) : null;
+        const src = age != null ? `Metra GPS · ${age < 60 ? `${age}s` : `${Math.round(age / 60)} min`} ago` : d.live ? "From Metra's predictions" : "Estimated from the schedule";
+        rows.push(`<li class="ts-now"><span class="ts-train" aria-hidden="true"></span><span class="ts-nowtxt"><span><b>Now</b> · between ${esc(stops[ni - 1].name)} and ${esc(stops[ni].name)}</span><span class="muted small">${esc(src)}</span></span></li>`);
+      }
+    });
+    $("ts-tl").innerHTML = rows.join("");
+    $("ts-panel").style.setProperty("--line", d.color || "var(--accent)");
+    renderSheetMore();
+    if (sheet.firstRender) {
+      sheet.firstRender = false;
+      // Open with the train (or the next stop) near the top: a stop or two behind it stays visible.
+      const sc = $("ts-scroll");
+      const at = $("ts-tl").querySelector(".ts-now") || $("ts-tl").querySelector(".ts-st.next");
+      sc.scrollTop = at ? Math.max(0, at.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 84) : 0;
+    }
+  }
+
+  // Drag the header: up for full height, down to half or to close.
+  (() => {
+    const handle = $("ts-drag"), panel = $("ts-panel");
+    let startY = null, startT = 0, base = 0, lastY = 0, lastT = 0, vel = 0;
+    handle.addEventListener("pointerdown", (e) => {
+      if (e.target.closest("button")) return;
+      startY = lastY = e.clientY; startT = lastT = performance.now(); base = sheetY(sheet.mode); vel = 0;
+      panel.style.transition = "none";
+      handle.setPointerCapture(e.pointerId);
+    });
+    handle.addEventListener("pointermove", (e) => {
+      if (startY == null) return;
+      const y = Math.max(0, base + e.clientY - startY);
+      panel.style.transform = `translateY(${y}px)`;
+      const t = performance.now();
+      vel = (e.clientY - lastY) / Math.max(1, t - lastT);
+      lastY = e.clientY; lastT = t;
+    });
+    const end = (e) => {
+      if (startY == null) return;
+      const y = Math.max(0, base + e.clientY - startY);
+      const moved = Math.abs(e.clientY - startY);
+      startY = null;
+      panel.style.transition = "";
+      if (moved < 6) { setSheetMode(sheet.mode === "half" ? "full" : sheet.mode); return; }  // a tap on the header
+      const half = SHEET.half();
+      if (vel > 0.9 || y > half + 110) return closeTrip();
+      if (vel < -0.6 || y < half / 2) return setSheetMode("full");
+      setSheetMode("half");
+    };
+    handle.addEventListener("pointerup", end);
+    handle.addEventListener("pointercancel", end);
+    window.addEventListener("resize", () => { if (sheet.trip) setSheetMode(sheet.mode, { animate: false }); });
+  })();
+
+  // Double-tap (or double-click) any train: on the board, the timetable or the map.
+  // Detected from pointer events (a map swallows the second tap's click for its own zoom).
+  (() => {
+    let last = { trip: null, t: 0, x: 0, y: 0 };
+    let swallowUntil = 0;
+    const tripOf = (el) => {
+      const x = el && el.closest && el.closest("[data-trip]");
+      if (!x || x.closest("#trip-sheet")) return null;
+      return x.dataset.trip || null;
+    };
+    document.addEventListener("pointerup", (e) => {
+      const trip = tripOf(e.target);
+      if (!trip) { last.trip = null; return; }
+      const t = performance.now();
+      if (last.trip === trip && t - last.t < 400 && Math.hypot(e.clientX - last.x, e.clientY - last.y) < 30) {
+        last.trip = null;
+        swallowUntil = t + 450;  // the click (if any) that follows only opens the sheet
+        e.stopPropagation();
+        openTrip(trip);
+        return;
+      }
+      last = { trip, t, x: e.clientX, y: e.clientY };
+    }, true);
+    // A second quick tap on a map train: don't let the map zoom on it.
+    for (const type of ["touchstart", "touchend", "dblclick"]) {
+      document.addEventListener(type, (e) => {
+        const onTrain = e.target.closest && e.target.closest(".train-marker");
+        if (onTrain && last.trip && performance.now() - last.t < 400) e.stopPropagation();
+        if (type === "dblclick" && tripOf(e.target)) { e.stopPropagation(); e.preventDefault(); }
+      }, { capture: true, passive: type !== "dblclick" });
+    }
+    document.addEventListener("click", (e) => {
+      // The rest of the double-tap (it can land on the sheet that just opened under the finger).
+      if (performance.now() < swallowUntil) { e.stopPropagation(); e.preventDefault(); }
+    }, true);
+  })();
 
   // ---------- display options (this device only) ----------
   const view = { pickers: "show", alerts: "bell", alertLines: "all", mapTrains: "dest", count: "5" };

@@ -882,3 +882,22 @@ def test_timetable_includes_trains_ending_at_the_station(tracker):
     assert datetime.fromtimestamp(r["origin_time"], TZ).strftime("%H:%M") == "08:00"
     # Departure boards (Next trains) never include them.
     assert not any(x.get("arriving") for x in tracker.timetable("A", now=NOW)["departures"])
+
+
+def test_trip_detail_lists_every_stop_and_position(tracker):
+    # Before it runs: the plain schedule, nothing passed, no position.
+    d = tracker.trip_detail("t-0800", now=NOW)  # 7:50, train starts 8:00
+    assert [s["name"] for s in d["stops"]] == ["Alpha", "Bravo", "Central"]
+    assert [datetime.fromtimestamp(s["scheduled"], TZ).strftime("%H:%M") for s in d["stops"]] == ["08:00", "08:10", "08:40"]
+    assert not d["running"] and d["next_index"] is None and not any(s["passed"] for s in d["stops"])
+    assert d["destination"] == "Central" and d["route_short"] == "L1"
+    # While running (no live data: schedule times): stops behind it are passed, next is ahead.
+    at = datetime(2026, 11, 9, 8, 20, tzinfo=TZ).timestamp()
+    d = tracker.trip_detail("t-0800", now=at)
+    assert d["running"] and d["next_index"] == 2
+    assert [s["passed"] for s in d["stops"]] == [True, True, False]
+    # Finished: everything passed.
+    done = tracker.trip_detail("t-0800", now=datetime(2026, 11, 9, 9, 30, tzinfo=TZ).timestamp())
+    assert not done["running"] and all(s["passed"] for s in done["stops"])
+    with pytest.raises(KeyError):
+        tracker.trip_detail("nope", now=NOW)

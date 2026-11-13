@@ -1289,6 +1289,91 @@ class Tracker:
         self._trains_cache = (now, result)
         return result
 
+    def trip_detail(self, trip_id: str, now: float | None = None) -> dict:
+        """One train's whole schedule: every stop with its scheduled and expected time,
+        and, while it's running, where it is (stops passed, the next stop, its GPS fix)."""
+        s = self.static
+        now = time.time() if now is None else now
+        if not s or trip_id not in s.trips:
+            raise KeyError(trip_id)
+        trip = s.trips[trip_id]
+        sts = s.trip_stops.get(trip_id) or []
+        span = s.trip_spans.get(trip_id)
+        if not sts or not span:
+            raise KeyError(trip_id)
+        # The service day this trip runs on that's closest to now (today's run, or the
+        # one still finishing after midnight).
+        best = None
+        for d in s.candidate_service_dates(now):
+            if trip[T_SERVICE] not in s.active_services(d):
+                continue
+            base = s.service_day_start(d)
+            start, end = base + span[0], base + span[1]
+            dist = 0 if start - 1800 <= now <= end + 1800 else min(abs(now - start), abs(now - end))
+            if best is None or dist < best[0]:
+                best = (dist, d, base)
+        if best is None:
+            raise KeyError(trip_id)
+        _, d, base = best
+        live = self.realtime_live and self._rt_matches_date(trip_id, d)
+        vehicle = next((t for t in self._all_trains(now).get("trains", []) if t.get("trip_id") == trip_id), None)
+        gps = self._gps.get(trip_id)
+        gps = gps if gps and gps.get("service_date") == d else None
+        preds = [self._predict(trip_id, x[S_SEQ], base) if live else None for x in sts]
+        known = [p for p in preds if p and p.get("delay") is not None]
+        delay = (known[-1]["delay"] if known else None)
+        tracking = False
+        if delay is None and vehicle and vehicle.get("delay") is not None:
+            delay, tracking = vehicle["delay"], bool(vehicle.get("tracking"))
+        elif delay is None and gps:
+            delay, tracking = gps.get("delay"), True
+        cancelled = bool(preds[0] and preds[0].get("cancelled"))
+        stops = []
+        for x, p in zip(sts, preds):
+            sched = base + (x[S_ARR] if x[S_ARR] is not None else x[S_DEP])
+            est = p["time"] if p and p.get("time") else sched + (delay or 0)
+            stops.append({
+                "stop_id": x[S_STOP],
+                "station_id": self._station_of(x[S_STOP]),
+                "name": s.stop_name(x[S_STOP]),
+                "scheduled": sched,
+                "time": est,
+                "skipped": bool(p and p.get("skipped")),
+            })
+        running = not cancelled and stops[0]["time"] - 60 <= now <= stops[-1]["time"] + 60
+        next_i = None
+        if running:
+            name = (vehicle or {}).get("next_stop") or (gps or {}).get("next_stop")
+            if name:
+                next_i = next((i for i, st in enumerate(stops) if st["name"] == name), None)
+            if next_i is None:
+                next_i = next((i for i, st in enumerate(stops) if st["time"] >= now and not st["skipped"]), None)
+        for i, st in enumerate(stops):
+            st["passed"] = next_i is not None and i < next_i or (not running and stops[-1]["time"] < now)
+        route = s.routes.get(trip[T_ROUTE], {})
+        return {
+            "trip_id": trip_id,
+            "train": trip[T_SHORT_NAME] or self._running_labels.get(trip_id),
+            "route_id": trip[T_ROUTE],
+            "route_short": route.get("short_name", trip[T_ROUTE]),
+            "route_name": route.get("long_name", trip[T_ROUTE]),
+            "color": route.get("color", "#888888"),
+            "text_color": route.get("text_color", "#FFFFFF"),
+            "origin": stops[0]["name"],
+            "destination": s.trip_destination(trip_id),
+            "direction": self._direction(sts[0][S_STOP], sts[-1][S_STOP]),
+            "delay": delay,
+            "live": bool(live and known),
+            "tracking": tracking and not (live and known),
+            "cancelled": cancelled,
+            "running": running,
+            "next_index": next_i,
+            "position_at": (vehicle or {}).get("timestamp"),
+            "stops": stops,
+            "data_as_of": self.data_as_of("tripupdates"),
+            "generated_at": now,
+        }
+
     def line_trains(self, route: str, direction: str | None = None, now: float | None = None, limit: int = 60) -> dict:
         """Every train on one line still to run today in one direction (running ones first).
 
