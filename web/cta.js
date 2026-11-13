@@ -43,14 +43,32 @@
   }
   const tripId = (run) => `cta:${run}`;
 
+  // CTA names stations like "Belmont (Red/Brown/Purple)". Show "Belmont" with
+  // coloured dots for its lines instead; keep any words that aren't line names
+  // ("Harlem (O'Hare Branch)", "Lake (Subway)") since the dots can't tell those apart.
+  const LINE_WORDS = new Set(["red", "blue", "brown", "green", "orange", "purple", "pink", "yellow"]);
+  function cleanName(name) {
+    const m = /^(.*?)\s*\(([^)]*)\)\s*$/.exec(name || "");
+    if (!m) return name || "";
+    const rest = m[2].split(/\/| - /).map((x) => x.trim()).filter((x) => x && !LINE_WORDS.has(x.toLowerCase()));
+    return rest.length ? `${m[1]} (${rest.join(", ")})` : m[1];
+  }
+  const nameOf = (id, fallback) => { const s = st.byId.get(id); return s ? s.display : cleanName(fallback || id); };
+  function dotsHtml(routes) {
+    if (!routes || !routes.length) return "";
+    const names = routes.map((r) => lineOf(r).short_name);
+    return `<span class="cta-dots" role="img" aria-label="${esc(names.join(", "))} Line${names.length > 1 ? "s" : ""}" title="${esc(names.join(", "))}">${routes.map((r) => `<i style="background:${esc(lineOf(r).color)}"></i>`).join("")}</span>`;
+  }
+  const stationHtml = (s) => `${esc(s.display)}${dotsHtml(s.routes)}`;
+
   // ---------- data ----------
   async function load() {
     if (st.loaded) return true;
     try {
       const [stations, lines, profile] = await Promise.all([
         host.api("/api/cta/stations"), host.api("/api/cta/lines"), host.api("/api/cta/settings")]);
-      st.stations = stations;
-      st.byId = new Map(stations.map((s) => [s.id, s]));
+      st.stations = stations.map((x) => ({ ...x, display: cleanName(x.name) }));
+      st.byId = new Map(st.stations.map((s) => [s.id, s]));
       st.lines = lines.lines;
       st.geo = lines.geojson;
       st.profile = profile;
@@ -95,7 +113,7 @@
     const reach = st.board && st.dest ? new Set(st.board.groups.map((g) => g.route_id)) : null;
     const list = d.trains.filter((t) => !reach || reach.has(t.route_id)).map((t) => ({
       ...t, system: "cta", id: tripId(t.run), trip_id: tripId(t.run), train: t.run,
-      live: true, delay: t.delayed ? 360 : 0, next_stop: t.next_station,
+      live: true, delay: t.delayed ? 360 : 0, next_stop: nameOf(t.next_station_id, t.next_station),
     }));
     host.mapView.updateTrains({ trains: list });
     const n = focus ? list.filter((t) => t.route_id === focus).length : list.length;
@@ -126,7 +144,7 @@
   function renderTitle() {
     const from = st.byId.get(st.station), to = st.byId.get(st.dest);
     $("board-title").innerHTML = from
-      ? `${esc(from.name)}${to ? ` <span class="arrow">→</span> ${esc(to.name)}` : ""}`
+      ? `${stationHtml(from)}${to ? ` <span class="arrow">→</span> ${stationHtml(to)}` : ""}`
       : "Choose a CTA station";
     $("board-swap").hidden = !(from && to);
     $("clear-btn").hidden = !(st.station || st.dest);
@@ -233,7 +251,7 @@
     const out = [];
     for (const s of st.stations) {
       if (onlyIds && !onlyIds.has(s.id)) continue;
-      const name = s.name.toLowerCase();
+      const name = s.display.toLowerCase();
       let score = !nq ? 1 : name.startsWith(raw) ? 0 : (name.includes(raw) || norm(s.name).includes(nq)) ? 1 : s.routes.some((r) => lineIds.has(r)) ? 2 : -1;
       if (score >= 0) out.push([score, s]);
     }
@@ -243,17 +261,19 @@
   function pickerFor(inputId, listId, getValue, onSelect, allowClear) {
     const input = $(inputId), list = $(listId);
     let items = [];
-    const current = () => (st.byId.get(getValue()) || {}).name || "";
+    const current = () => (st.byId.get(getValue()) || {}).display || "";
+    const dots = $(`${inputId}-dots`);
+    const syncDots = () => { if (dots) dots.innerHTML = dotsHtml((st.byId.get(getValue()) || {}).routes); };
     function render() {
       items = matches(input.value).slice(0, 80);
       list.innerHTML = (allowClear && getValue() ? '<li role="option" data-id="" class="clear-opt">Any destination</li>' : "")
-        + (items.length ? items.map((s) => `<li role="option" data-id="${esc(s.id)}"><span>${esc(s.name)}</span><span class="chips">${s.routes.map(chipFor).join("")}</span></li>`).join("")
+        + (items.length ? items.map((s) => `<li role="option" data-id="${esc(s.id)}"><span>${stationHtml(s)}</span></li>`).join("")
           : '<li class="empty">No matching stations</li>');
       list.hidden = false;
       input.setAttribute("aria-expanded", "true");
     }
-    function choose(id) { list.hidden = true; input.blur(); onSelect(id); input.value = current(); }
-    input.addEventListener("focus", () => { input.select(); render(); });
+    function choose(id) { list.hidden = true; input.blur(); onSelect(id); input.value = current(); syncDots(); }
+    input.addEventListener("focus", () => { input.select(); render(); if (dots) dots.hidden = true; });
     input.addEventListener("input", render);
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") { e.preventDefault(); if (allowClear && !input.value.trim()) choose(""); else if (items[0]) choose(items[0].id); }
@@ -261,8 +281,11 @@
     });
     input.addEventListener("search", () => { if (allowClear && !input.value) choose(""); });
     list.addEventListener("mousedown", (e) => { const li = e.target.closest("li[data-id]"); if (li) { e.preventDefault(); choose(li.dataset.id); } });
-    input.addEventListener("blur", () => setTimeout(() => { list.hidden = true; input.setAttribute("aria-expanded", "false"); input.value = current(); }, 120));
-    return { sync: () => { input.value = current(); } };
+    input.addEventListener("blur", () => setTimeout(() => {
+      list.hidden = true; input.setAttribute("aria-expanded", "false"); input.value = current();
+      if (dots) { dots.hidden = false; syncDots(); }
+    }, 120));
+    return { sync: () => { if (document.activeElement !== input) input.value = current(); syncDots(); } };
   }
   let fromPick, toPick;
   function renderPicker() {
@@ -337,14 +360,14 @@
   }
   function syncPlaces() {
     if (!st.active) return;
-    const pick = (id) => { const s = id && st.byId.get(id); return s ? { id: s.id, name: s.name, lat: s.lat, lon: s.lon } : null; };
+    const pick = (id) => { const s = id && st.byId.get(id); return s ? { id: s.id, name: s.display, lat: s.lat, lon: s.lon } : null; };
     host.mapView.setPlaces({ home: pick(st.profile.home_station), work: pick(st.profile.work_station), current: pick(st.station) });
   }
 
   // ---------- train sheet (double-tap): CTA's follow data in the sheet's shape ----------
   function toTrip(d) {
-    const passed = (d.passed || []).map((s) => ({ station_id: s.station_id, name: s.name, time: s.time, scheduled: null, passed: true }));
-    const ahead = d.stops.map((s) => ({ station_id: s.station_id, name: s.name, time: s.time, scheduled: null }));
+    const passed = (d.passed || []).map((s) => ({ station_id: s.station_id, name: nameOf(s.station_id, s.name), time: s.time, scheduled: null, passed: true }));
+    const ahead = d.stops.map((s) => ({ station_id: s.station_id, name: nameOf(s.station_id, s.name), time: s.time, scheduled: null }));
     const delays = d.delays_today || [];
     return {
       trip_id: tripId(d.run), train: d.run, route_short: d.route_short, color: d.color, text_color: d.text_color,
@@ -358,10 +381,10 @@
   const tripPath = (id) => `/api/cta/follow?run=${encodeURIComponent(id.slice(4))}`;
 
   function popup(t) {
-    const rows = [["Run", `#${esc(t.run)}`], ["To", esc(t.destination || "—")], ["Next", esc(t.next_station || "—")],
+    const rows = [["Run", `#${esc(t.run)}`], ["To", esc(t.destination || "—")], ["Next", t.next_station_id && st.byId.has(t.next_station_id) ? stationHtml(st.byId.get(t.next_station_id)) : esc(t.next_station || "—")],
       ["Status", t.delayed ? '<span class="badge cancel">Delayed</span>' : t.due ? "Arriving" : "Live"]];
     const row = st.board && st.board.groups.flatMap((g) => g.trains).find((x) => x.run === t.run);
-    const foot = row ? `<div class="popup-board"><span>At ${esc(st.board.station.name)} <b>${esc(host.fmtTime(row.time))}</b></span></div>` : "";
+    const foot = row ? `<div class="popup-board"><span>At ${esc(nameOf(st.board.station.id))} <b>${esc(host.fmtTime(row.time))}</b></span></div>` : "";
     return `<div class="popup"><h3>${chipFor(t.route_id)} ${esc(lineOf(t.route_id).name || "")}</h3><dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>${foot}<p class="muted small">Double-tap for every stop</p></div>`;
   }
 
@@ -397,7 +420,7 @@
     host.applyView();
     if (!(await load())) return;
     host.mapView.updateTrains({ trains: [] });
-    host.mapView.setStations(st.stations);
+    host.mapView.setStations(st.stations.map((x) => ({ ...x, name: x.display })));
     await host.mapView.setLines(st.geo);
     host.renderMapHead();
     render();

@@ -956,3 +956,9 @@ body:not(.sys-cta) #cta-picker { display: none !important; }
 .cta-freq .f-grid span { font-size: 10.5px; color: var(--muted); }
 .cta-freq .f-span { margin-top: 6px; font-size: 12px; color: var(--muted); }
 .cta-freq .f-span b { color: var(--text); }
+.cta-dots { display: inline-flex; gap: 3px; margin-left: 7px; vertical-align: middle; position: relative; top: -1px; }
+.cta-dots i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 0 1.5px var(--panel); }
+#board-title .cta-dots i { width: 10px; height: 10px; }
+.cta-dots.in-input { position: absolute; right: 14px; top: 50%; transform: translateY(-50%); margin: 0; pointer-events: none; }
+.cta-dots.in-input i { box-shadow: 0 0 0 1.5px var(--panel-2); }
+#cta-from, #cta-to { padding-right: 84px; }
