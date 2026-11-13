@@ -828,3 +828,37 @@ body.tt-station-mode .hide-pickers { display: none; }
 .tt-head .chip-pin { padding-left: 16px; }
 .chip-bar .line-chips { -webkit-mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%);
   mask-image: linear-gradient(to right, transparent 0, #000 14px, #000 calc(100% - 14px), transparent 100%); }
+
+/* ==== calm motion (mockup) ==== */
+/* Slower, softer timing everywhere: a long ease-out that settles gently. */
+:root { --ease: cubic-bezier(.22, 1, .36, 1); --t-fast: .2s; --t: .34s; --t-slow: .48s; }
+@keyframes fade-up   { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes fade-down { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+/* Tab switch: the page glides in from the side of the tab you tapped. */
+@keyframes glide-from-right { from { opacity: 0; transform: translateX(22px); } to { opacity: 1; transform: none; } }
+@keyframes glide-from-left  { from { opacity: 0; transform: translateX(-22px); } to { opacity: 1; transform: none; } }
+.panel.tab-in-right > :not(.tabs) { animation: glide-from-right var(--t-slow) var(--ease) both; }
+.panel.tab-in-left > :not(.tabs)  { animation: glide-from-left var(--t-slow) var(--ease) both; }
+.tabs::before { transition-duration: .4s; }
+/* Lists: a slower cascade. */
+.list-enter > * { animation: fade-up .5s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms); }
+/* Header card settles in. */
+@keyframes hero-settle { from { opacity: 0; transform: translateY(6px) scale(.985); } to { opacity: 1; transform: none; } }
+.lt-hero.hero-in { animation: hero-settle .5s var(--ease) both; }
+/* Progress bars grow out to where each train is. */
+@keyframes bar-grow { from { width: 0; } }
+.lt-bar.grow > span { animation: bar-grow .8s var(--ease) both; animation-delay: calc(var(--i, 0) * 45ms + 150ms); }
+/* Direction toggle: the highlight slides across, like the tabs. */
+.lt-dir { position: relative; }
+.lt-dir::before { content: ""; position: absolute; top: 3px; bottom: 3px; left: 3px; width: calc(50% - 5px);
+  border-radius: 7px; background: var(--panel); box-shadow: 0 1px 3px rgba(0, 0, 0, .25);
+  transition: transform .4s var(--ease); }
+.lt-dir:has(button[data-dir="outbound"][aria-pressed="true"])::before { transform: translateX(calc(100% + 4px)); }
+.lt-dir button { position: relative; z-index: 1; transition: color .3s ease; }
+.lt-dir button[aria-pressed="true"] { background: none; box-shadow: none; }
+/* Chips change state softly. */
+.line-chip { transition: background-color .3s ease, border-color .3s ease, color .3s ease; }
+@media (prefers-reduced-motion: reduce) {
+  .panel.tab-in-right > :not(.tabs), .panel.tab-in-left > :not(.tabs), .lt-hero.hero-in, .lt-bar.grow > span { animation: none; }
+  .lt-dir::before { transition: none; }
+}

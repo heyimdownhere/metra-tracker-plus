@@ -516,7 +516,7 @@
         if (opts.fit !== false) {
           const b = lineFocus ? lineBounds(lineFocus) : null;
           const pad = opts.padding || { top: 150, bottom: 170, left: 40, right: 40 };
-          if (b) map.fitBounds(b, { padding: pad, maxZoom: 12, duration: 700 });
+          if (b) map.fitBounds(b, { padding: pad, maxZoom: 12, duration: 950, easing: (t) => 1 - Math.pow(1 - t, 4) });
           else if (!lineFocus) fitLines();
         }
       });
