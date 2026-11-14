@@ -1202,7 +1202,8 @@
 
   // ---------- train detail sheet (double-tap any train) ----------
   // Opens half-height: a summary and the timeline around the train; drag up for every stop.
-  const sheet = { trip: null, mode: "closed", data: null, timer: null, firstRender: false };
+  // follow: keep the train in view as it moves down the list, until you scroll the list yourself.
+  const sheet = { trip: null, mode: "closed", data: null, timer: null, firstRender: false, follow: true };
   const SHEET = { half: () => Math.round(window.innerHeight * 0.46), full: () => 0 };
   function sheetY(mode) { return mode === "full" ? SHEET.full() : mode === "half" ? SHEET.half() : window.innerHeight; }
   function setSheetMode(mode, { animate = true } = {}) {
@@ -1220,6 +1221,7 @@
     clearTimeout(deferScroll.t);  // a double-tap: stay where you are
     sheet.trip = tripId;
     sheet.firstRender = true;
+    sheet.follow = true;
     if (sheet.data && sheet.data.trip_id === tripId) renderTrip(sheet.data);  // seen it: show it now, refresh below
     else { sheet.data = null; $("ts-head").innerHTML = '<p class="muted">Loading…</p>'; $("ts-tl").innerHTML = ""; }
     const wrap = $("trip-sheet");
@@ -1313,13 +1315,27 @@
     $("ts-tl").innerHTML = rows.join("");
     $("ts-panel").style.setProperty("--line", d.color || "var(--accent)");
     renderSheetMore();
-    if (sheet.firstRender) {
+    // Only once the sheet is on screen: a hidden list can't be scrolled (reopening a train
+    // draws the saved copy before the sheet appears).
+    if ((sheet.firstRender || sheet.follow) && !$("trip-sheet").hidden) {
       sheet.firstRender = false;
-      // Open with the train (or the next stop) near the top: a stop or two behind it stays visible.
-      const sc = $("ts-scroll");
-      const at = $("ts-tl").querySelector(".ts-now") || $("ts-tl").querySelector(".ts-st.next");
-      sc.scrollTop = at ? Math.max(0, at.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 84) : 0;
+      scrollToTrain(d);
     }
+  }
+
+  // Put the train (or the next stop) near the top of the list, with a stop or two behind it
+  // still showing. A train that has arrived shows the end of the list; one that hasn't left
+  // yet, the start.
+  function scrollToTrain(d) {
+    const sc = $("ts-scroll"), tl = $("ts-tl");
+    const finished = !d.running && d.stops.length && d.stops[d.stops.length - 1].time < serverNow();
+    const at = tl.querySelector(".ts-now") || tl.querySelector(".ts-st.next") || (finished ? tl.lastElementChild : null);
+    const top = at ? Math.max(0, at.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 84) : 0;
+    if (Math.abs(sc.scrollTop - top) > 2) sc.scrollTop = top;
+  }
+  // Scrolling the list yourself stops it following the train (until the sheet is opened again).
+  for (const ev of ["wheel", "touchmove", "keydown"]) {
+    $("ts-scroll").addEventListener(ev, () => { sheet.follow = false; }, { passive: true });
   }
 
   // Drag the header: up for full height, down to half or to close.

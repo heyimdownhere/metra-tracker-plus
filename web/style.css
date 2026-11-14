@@ -884,7 +884,10 @@ body.tt-station-mode .hide-pickers { display: none; }
 .ts-sum div { display: flex; flex-direction: column; gap: 2px; font-size: 14px; min-width: 0; }
 .ts-sum b { font-weight: 700; overflow: hidden; text-overflow: ellipsis; }
 .ts-k { font-size: 10px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ts-scroll { flex: 1; overflow: auto; overscroll-behavior: contain; padding-bottom: 46vh; }
+/* Half-open, the bottom 46vh of the list is off screen. The extra 22vh lets the last stops
+   scroll up into the visible part (above the "Drag up" bar), so a train near the end of its
+   trip can be shown like any other. */
+.ts-scroll { flex: 1; overflow: auto; overscroll-behavior: contain; padding-bottom: calc(46vh + 22vh); }
 .trip-sheet.is-full .ts-scroll { padding-bottom: 16px; }
 .ts-tl { list-style: none; margin: 0; padding: 4px 0; }
 .ts-st { display: flex; align-items: center; gap: 12px; padding: 8px 16px 8px 14px; position: relative; min-height: 38px; }
