@@ -450,8 +450,9 @@ def test_every_system_is_listed_and_served_under_its_own_path(tracker, tmp_path,
     main, c = _app_with_fixture(tracker, tmp_path, monkeypatch)
     systems = {s["id"]: s for s in c.get("/api/systems").json()}
     assert set(systems) == {"metra", "cta"} and systems["metra"]["api"] == "/api/metra"
-    assert c.get("/api/metra/next?station=A").json() == c.get("/api/next?station=A").json() | {
-        "generated_at": c.get("/api/metra/next?station=A").json()["generated_at"]}
+    # Same answer at both addresses (apart from when it was made, which can tick over a second).
+    same = lambda url: {k: v for k, v in c.get(url).json().items() if k != "generated_at"}
+    assert same("/api/metra/next?station=A") == same("/api/next?station=A")
     assert c.get("/api/cta/status").status_code == 200
     paths = c.get("/openapi.json").json()["paths"]
     assert "/api/metra/next" in paths and "/api/cta/arrivals" in paths and "/api/next" not in paths

@@ -12,8 +12,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=America/Chicago
 
 WORKDIR /app
-COPY requirements.txt requirements.lock ./
-RUN pip install --no-cache-dir -r requirements.txt -c requirements.lock
+COPY requirements.txt requirements-lock.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -c requirements-lock.txt
 
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY app ./app
