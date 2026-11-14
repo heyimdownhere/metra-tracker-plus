@@ -939,7 +939,7 @@ body:not(.tt-station-mode) #home-btn, body:not(.tt-station-mode) #work-btn { dis
 .sys-switch button[aria-selected="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 3px rgba(0, 0, 0, .18); }
 .sys-switch button:focus-visible { outline: 2px solid var(--accent); }
 @media (max-width: 520px) { .brand h1 { display: none; } }
-body.sys-cta #picker, body.sys-cta #tt-head, body.sys-cta .line-card-more, body.sys-cta #board-notice { display: none !important; }
+body.sys-cta #picker, body.sys-cta .line-card-more, body.sys-cta #board-notice { display: none !important; }
 body:not(.sys-cta) #cta-picker { display: none !important; }
 #board-title .arrow { color: var(--muted); font-weight: 600; }
 .cta-lc .lc-in b { font-size: 26px; }

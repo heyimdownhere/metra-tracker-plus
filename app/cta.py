@@ -90,6 +90,7 @@ class CtaTracker:
         self._client: httpx.AsyncClient | None = None
         self._tasks: list[asyncio.Task] = []
         self._meta: dict | None = None
+        self._ends: dict[str, dict] = {}
         self.live = TrainTracker(api_key, lambda: self._client, self.cache.dir / "budget.json")
         # History (its own database), filled by the recorder.
         self.history = CtaHistory(config_dir / "cta-history.db", history_days)
@@ -446,6 +447,43 @@ class CtaTracker:
                     return "inbound" if here < prev else "outbound"
         return None
 
+    def _end_minutes(self, station: str, gk: str) -> dict[str, int]:
+        """Minutes from this station to the end of the line, per destination sign
+        (e.g. {"Kimball": 19}): the sign is matched to the station of that name the
+        trains reach. Signs that aren't a station ("Loop") are left out."""
+        sch = self._need_schedule()
+        cache = self._ends.get(sch.version)
+        if cache is None:
+            self._ends = {sch.version: (cache := {})}
+        key = (station, gk)
+        if key not in cache:
+            def norm(name: str) -> str:
+                return "".join(ch for ch in name.lower() if ch.isalnum())
+            out: dict[str, int] = {}
+            reach = sch.reach.get(key, {})
+            by_name = {norm(sch.stations[sid]["name"].split(" (")[0]): mins
+                       for sid, mins in reach.items() if sid in sch.stations}
+            for by_service in sch.deps.get(station, {}).get(gk, {}).values():
+                for _, sign in by_service:
+                    if sign in out:
+                        continue
+                    n = norm(sign)
+                    mins = by_name.get(n)
+                    if mins is None:
+                        # Signs can be short for the station: "Jefferson Park" (Transit
+                        # Center), "Skokie" (Dempster-Skokie). Take the farthest match:
+                        # the end of the line, not Oakton-Skokie on the way.
+                        near = [m for name, m in by_name.items() if n and (name.startswith(n) or name.endswith(n))]
+                        mins = max(near) if near else None
+                    if mins is None and n == "loop":
+                        # "Loop" isn't a station: when it gets to the first stop in the Loop.
+                        inside = [m for sid, m in reach.items() if (self._loop_dist(sid) or 1e9) <= DOWNTOWN_M]
+                        mins = min(inside) if inside else None
+                    if mins is not None:
+                        out[sign] = mins
+            cache[key] = out
+        return cache[key]
+
     def timetable(self, station: str, now: float | None = None, to: str | None = None) -> dict:
         """Today at a station: every train still to come (`departures`, from the
         schedule; see timetable_live for live times), and per line and direction
@@ -476,12 +514,15 @@ class CtaTracker:
             rid = gk.split(":", 1)[0]
             direction = self._direction(station, gk)
             line = self._line_info(rid)
+            ends = self._end_minutes(station, gk)
             for secs, headsign in deps:
                 t = midnight + secs
                 if t >= now - 60:
+                    end = ends.get(headsign)
                     rows.append({"key": gk, **line, "direction": direction, "destination": headsign,
                                  "time": t, "scheduled": t, "run": None, "live": False, "delayed": False,
-                                 "due": False, "arrival": t + travel * 60 if travel is not None else None})
+                                 "due": False, "arrival": t + travel * 60 if travel is not None else None,
+                                 "final_arrival": t + end * 60 if end is not None else None})
             if len(deps) < 2:
                 continue
             mins = [secs / 60 for secs, _ in deps]
@@ -530,6 +571,7 @@ class CtaTracker:
             d["error"] = board["error"]
             return d
         directions = {g["key"]: g["direction"] for g in d["groups"]}
+        ends = {g["key"]: self._end_minutes(station, g["key"]) for g in board["groups"]}
         live_rows: list[dict] = []
         last_live: dict[str, float] = {}
         for g in board["groups"]:
@@ -539,7 +581,9 @@ class CtaTracker:
                                   "direction": directions.get(g["key"], self._direction(station, g["key"])),
                                   "destination": t["destination"], "time": t["time"], "scheduled": None,
                                   "run": t["run"], "live": t["live"], "delayed": t["delayed"], "due": t["due"],
-                                  "arrival": t.get("arrives")})
+                                  "arrival": t.get("arrives"),
+                                  "final_arrival": (t["time"] + ends[g["key"]][t["destination"]] * 60
+                                                    if t["destination"] in ends[g["key"]] else None)})
                 last_live[g["key"]] = max(last_live.get(g["key"], 0), t["time"])
         # Live trains stand in for the scheduled ones up to the last live one.
         rows = [r for r in d["departures"] if r["time"] > last_live.get(r["key"], 0) + LIVE_OVERLAP] + live_rows

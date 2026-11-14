@@ -232,13 +232,19 @@
     if (st.station && st.station === p.work_station) return "outbound";
     return hm < (p.switch_time || "12:00") ? "inbound" : "outbound";
   }
-  // How often trains come now on the lines shown, e.g. "every 4–8 min".
-  function howOften(groups) {
-    const now = groups.flatMap((g) => g.periods.filter((x) => x.now && x.min != null));
-    if (!now.length) return "";
-    const lo = Math.min(...now.map((x) => x.min)), hi = Math.max(...now.map((x) => x.max));
-    const range = lo === hi ? `${lo}` : `${lo}–${hi}`;
-    return `${new Set(groups.map((g) => g.route_id)).size > 1 ? "each line " : ""}every ${range} min now`;
+  // The line chips above the timetable, like Metra's: "Station" (every line here) or one line.
+  st.ttLine = null;
+  function renderTtHead() {
+    const lines = (st.byId.get(st.station) || {}).routes || [];
+    if (st.ttLine && !lines.includes(st.ttLine)) st.ttLine = null;
+    const chip = (id, label, color) => `<button type="button" class="line-chip${st.ttLine === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${st.ttLine === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
+    $("tt-line-pin").innerHTML = chip(null, "📍 Station", null);
+    $("tt-line-chips").innerHTML = lines.map((rid) => { const l = lineOf(rid); return chip(rid, l.short_name, l.color); }).join("");
+  }
+  function setTtLine(rid) {
+    st.ttLine = rid || null;
+    renderTtHead();
+    renderTimetable();
   }
   function renderTimetable() {
     if (!st.active) return;
@@ -250,20 +256,21 @@
     if (!st.station) { tt.innerHTML = ""; host.showEmpty("Pick a CTA station to see today's trains."); return; }
     if (!d) { tt.innerHTML = ""; host.showEmpty("Loading…"); return; }
     host.showEmpty("");
+    renderTtHead();
     const from = nameOf(st.station);
     // Downtown (in the Loop) "toward downtown" means nothing: one list.
     const split = !d.downtown && d.departures.some((r) => r.direction);
     const dir = split ? (st.ttDir || (st.ttDir = defaultDir())) : null;
-    const rows = d.departures.filter((r) => !split || r.direction === dir);
-    const keys = new Set(rows.map((r) => r.key));
-    const groups = d.groups.filter((g) => keys.has(g.key));
-    const lines = [...new Set(rows.map((r) => r.route_id))];
-    const color = (rows[0] && rows[0].color) || "var(--accent)";
-    const last = rows.length ? rows[rows.length - 1].time : null;
-    const counts = rows.length ? `${rows.length} train${rows.length === 1 ? "" : "s"} left today · last ${host.fmtTime(last)}` : "No more trains today";
-    const often = howOften(groups);
+    const rows = d.departures.filter((r) => (!split || r.direction === dir) && (!st.ttLine || r.route_id === st.ttLine));
+    // The station's lines (as Metra's summary shows them): chips when there are one or two.
+    const here = st.ttLine ? [st.ttLine] : ((st.byId.get(st.station) || {}).routes || []);
+    const lines = here.map(lineOf);
+    const many = new Set(rows.map((r) => r.route_id)).size > 1;
+    const color = (lines[0] && lines[0].color) || "var(--accent)";
+    const left = rows.length;
+    const counts = left ? `${left} train${left === 1 ? "" : "s"} left today · last ${host.fmtTime(rows[left - 1].time)}` : "No more trains today";
     const html = [`<div class="lt-hero" style="--line:${esc(color)}">
-        <div class="lt-sub lt-sub-only">${lines.length === 1 && rows[0] ? host.chip(rows[0].route_short, rows[0].color, rows[0].text_color) + " " : ""}${esc(counts)}${often ? ` · ${esc(often)}` : ""}${d.source === "live" ? ` · CTA data ${esc(host.fmtTime(d.as_of))}` : ""}</div>
+        <div class="lt-sub lt-sub-only">${lines.length <= 2 ? lines.map((l) => host.chip(l.short_name, l.color, l.text_color)).join("") + " " : ""}${esc(counts)}${d.as_of ? ` · <span title="When CTA last updated this data">CTA data ${esc(host.fmtDateTime(d.as_of))}</span>` : ""}</div>
       </div>`];
     if (split) {
       html.push(`<div class="lt-dir" role="group" aria-label="Direction">
@@ -273,20 +280,24 @@
     }
     if (!rows.length) {
       const where = split ? ` ${dir === "inbound" ? "toward" : "away from"} downtown` : "";
-      html.push(`<p class="muted tt-none">No more trains${where} from ${esc(from)} today${st.dest ? ` to ${esc(nameOf(st.dest))}` : ""}.</p>`);
+      const line = st.ttLine ? `${lineOf(st.ttLine).short_name} Line ` : "";
+      html.push(`<p class="muted tt-none">No more ${esc(line)}trains${where} from ${esc(from)} today${st.dest ? ` to ${esc(nameOf(st.dest))}` : ""}.</p>`);
     } else {
       const sel = host.selectedTrip();
       const next = rows[0];
       html.push('<ol class="lt-list tt-list">');
       for (const r of rows) {
         const mins = Math.round((r.time - now) / 60);
-        const status = r.delayed ? '<span class="badge cancel" title="CTA says this train is delayed">Delayed</span>'
-          : r.live ? '<span class="badge live">Live</span>' : "";
-        const arr = r.arrival ? `arrives ${esc(host.fmtTime(r.arrival))}` : "";
+        // Like Metra's "On time" / "9 min late". CTA doesn't say how late, only whether a
+        // train is tracked live or flagged as delayed.
+        const status = r.delayed ? '<span class="delay late" title="CTA says this train is delayed">Delayed</span>'
+          : r.live ? '<span class="delay ontime" title="Live from CTA Train Tracker">Live</span>' : "";
+        const end = st.dest ? r.arrival : r.final_arrival;
+        const arr = end ? `arrives ${esc(host.fmtTime(end))}` : "";
         const trip = r.run ? ` data-trip="${tripId(r.run)}" data-route="${esc(r.route_id)}"` : "";
         html.push(`<li class="lt-row${r === next ? " next" : ""}${r.run && sel === tripId(r.run) ? " selected" : ""}"${trip}>
           <span class="lt-time">${host.bigTime(r.time)}</span>
-          <span class="lt-main"><span>${lines.length > 1 ? host.chip(r.route_short, r.color, r.text_color) + " " : ""}${esc(r.destination || r.route_name)}${r.run ? ` <span class="muted small">#${esc(r.run)}</span>` : ""}</span>
+          <span class="lt-main"><span>${many ? host.chip(r.route_short, r.color, r.text_color) + " " : ""}${esc(r.destination || r.route_name)}${r.run ? ` <span class="muted small">#${esc(r.run)}</span>` : ""}</span>
             <span class="muted small">${[arr, status].filter(Boolean).join(" · ")}</span></span>
           <span class="lt-in">${r.due || mins <= 0 ? "Now" : host.untilText(mins)}</span>
         </li>`);
@@ -539,6 +550,7 @@
     myLines: () => new Set([st.station, st.dest, st.profile.home_station, st.profile.work_station]
       .map((id) => st.byId.get(id)).filter(Boolean).flatMap((s) => s.routes)),
     selectStation, clear, swap, goTrip, popup, toTrip, tripPath,
+    renderTtHead, setTtLine,
     tabChanged: () => { st.board = null; st.timetable = null; render(); refreshAll(); },
   };
 })();

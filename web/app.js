@@ -274,6 +274,7 @@
   });
   // Timetable tab: a strip of lines on top; "My station" goes back to the station timetable.
   function renderTtHead() {
+    if (CTA.active()) return CTA.renderTtHead();
     const focus = state.ttLine ? state.ttLine.route : null;
     const chip = (id, label, color) => `<button type="button" class="line-chip${focus === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${focus === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
     $("tt-line-pin").innerHTML = chip(null, "📍 Station", null);
@@ -285,6 +286,7 @@
     const b = e.target.closest(".line-chip");
     if (!b) return;
     const rid = b.dataset.route || null;
+    if (CTA.active()) return CTA.setTtLine(rid);
     if (rid === (state.ttLine ? state.ttLine.route : null)) return;
     setTtLine(rid);
   });
@@ -1512,9 +1514,9 @@
     btn.classList.toggle("icon-only", !pickersOpen);
     btn.setAttribute("aria-expanded", String(show));
     if (CTA.active()) {
-      // CTA has its own station boxes; Metra's line timetables and "Trains to" chip don't apply.
+      // CTA has its own station boxes and its own line chips (lines at the station).
       $("picker").hidden = true;
-      $("tt-head").hidden = true;
+      if (state.tab === "timetable") { CTA.renderTtHead(); $("tt-head").hidden = false; } else $("tt-head").hidden = true;
       $("map-clear").hidden = true;
       document.body.classList.remove("tt-line-mode");
       btn.hidden = false;
@@ -1940,7 +1942,7 @@
 
   // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
   CTA.init({
-    api, esc, chip, enter, toast, fmtTime, bigTime, untilText, serverNow, mapView, applyView, showEmpty, renderMapHead,
+    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, mapView, applyView, showEmpty, renderMapHead,
     tab: () => state.tab,
     selectedTrip: () => state.selectedTrip,
     pickersShown: () => state.tab === "timetable" || view.pickers !== "hide" || pickersOpen,

@@ -247,6 +247,13 @@ def test_timetable_directions_and_going_to(tmp_path, schedule):
     assert {r["key"] for r in rows} == {"G:5"} and all(r["arrival"] - r["time"] == 300 for r in rows)
 
 
+def test_timetable_rows_say_when_they_reach_the_end_of_the_line(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, key=None)
+    rows = {r["destination"]: r for r in t.timetable("40500", now=_at(7, 0))["departures"]}   # Belmont
+    assert rows["Kimball"]["final_arrival"] - rows["Kimball"]["time"] == 600         # 08:15 -> Kimball 08:25
+    assert rows["Loop"]["final_arrival"] is not None                                 # first stop in the Loop
+
+
 def test_timetable_uses_live_times_for_the_next_trains(tmp_path, schedule):
     t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=LIVE))
     d = run(t.timetable_live("40100", now=MON_0755))
