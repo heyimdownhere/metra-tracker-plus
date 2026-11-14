@@ -69,7 +69,7 @@ jobs:
           echo "healthz: $code"; [ "$code" = 200 ] || [ "$code" = 503 ]
           test "$(docker exec ns stat -c %u /proc/1)" = 99
           test "$(stat -c %u appdata/settings.json)" = 99
-          curl -sf -I http://127.0.0.1:8080/ | grep -i content-security-policy
+          curl -sf -o /dev/null -D - http://127.0.0.1:8080/ | grep -i content-security-policy
       - if: failure()
         run: docker logs ns || true
 

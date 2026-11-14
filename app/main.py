@@ -172,7 +172,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # ---- API docs, served from this server (no outside script) ------------------------
     @app.get("/api/docs", include_in_schema=False)
     def docs():
-        return get_swagger_ui_html(openapi_url=app.openapi_url, title="Next Stop API",
+        return get_swagger_ui_html(openapi_url=app.openapi_url or "/openapi.json", title="Next Stop API",
                                    swagger_js_url="/vendor/swagger/swagger-ui-bundle.js",
                                    swagger_css_url="/vendor/swagger/swagger-ui.css",
                                    swagger_favicon_url="/favicon.svg")
