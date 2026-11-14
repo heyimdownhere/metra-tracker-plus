@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -48,6 +49,20 @@ MAX_DOWNLOAD = 400 * 1024 * 1024  # CTA's schedule zip is about 50 MB; refuse an
 # A gap longer than this between trains means no service (e.g. no midday
 # Purple Express), not a very long wait, in the timetable's periods.
 NO_SERVICE_GAP = 60
+
+# Downtown: the Loop. Stations within DOWNTOWN_M of this point are "downtown",
+# where "toward/away from downtown" means nothing, so their timetable is one list.
+LOOP = (41.8819, -87.6278)
+DOWNTOWN_M = 800
+# How long after its last live train a scheduled one is still shown in the
+# timetable (live times replace the schedule for the next few trains).
+LIVE_OVERLAP = 60
+
+
+def _dist_m(a: tuple[float, float], b: tuple[float, float]) -> float:
+    x = math.radians(b[1] - a[1]) * math.cos(math.radians((a[0] + b[0]) / 2))
+    return 6371000.0 * math.hypot(x, math.radians(b[0] - a[0]))
+
 
 # Timetable periods (minutes after midnight of the service day).
 PERIODS = [
@@ -405,11 +420,42 @@ class CtaTracker:
             log.warning("Reading CTA history for %s failed: %s", station, exc)
             return {}
 
-    def timetable(self, station: str, now: float | None = None) -> dict:
-        """How often trains come today, per line and direction, plus first and last
-        train: L trains run every few minutes, so this replaces a full list."""
+    def _loop_dist(self, station: str) -> float | None:
+        info = self._need_schedule().stations.get(station)
+        return _dist_m((info["lat"], info["lon"]), LOOP) if info else None
+
+    def _direction(self, station: str, gk: str) -> str | None:
+        """'inbound' if this group's trains head toward the Loop from here (their next
+        stop is closer to it), 'outbound' if away, None at a downtown station (or if
+        unknown)."""
+        here = self._loop_dist(station)
+        if here is None or here <= DOWNTOWN_M:
+            return None
+        seqs = self._need_schedule().sequences.get(gk, [])
+        for seq in seqs:
+            if station in seq[:-1]:
+                nxt = self._loop_dist(seq[seq.index(station) + 1])
+                if nxt is not None:
+                    return "inbound" if nxt < here else "outbound"
+        # The last stop under this sign (e.g. Orange "Loop" trains at Roosevelt, just
+        # before the sign changes): judge by the stop it came from.
+        for seq in seqs:
+            if station in seq[1:]:
+                prev = self._loop_dist(seq[seq.index(station) - 1])
+                if prev is not None:
+                    return "inbound" if here < prev else "outbound"
+        return None
+
+    def timetable(self, station: str, now: float | None = None, to: str | None = None) -> dict:
+        """Today at a station: every train still to come (`departures`, from the
+        schedule; see timetable_live for live times), and per line and direction
+        how often trains come, with the first and last train (`groups`).
+
+        `to`: only trains that go on to that station, with their arrival there."""
         now = time.time() if now is None else now
         info = self.station(station)
+        if to is not None:
+            self.station(to)
         sch = self._need_schedule()
         today = datetime.fromtimestamp(now, TZ).date()
         midnight = datetime(today.year, today.month, today.day, tzinfo=TZ).timestamp()
@@ -419,9 +465,23 @@ class CtaTracker:
             midnight = datetime(today.year, today.month, today.day, tzinfo=TZ).timestamp()
         services = sch.active_services(today)
         now_min = (now - midnight) / 60
-        out = []
+        out, rows = [], []
         for gk, by_service in sch.deps.get(station, {}).items():
+            travel = self._reaches(station, gk, to)
+            if travel is False:
+                continue  # doesn't go to `to`
             deps = sorted(d for sid in services & by_service.keys() for d in by_service[sid])
+            if not deps:
+                continue
+            rid = gk.split(":", 1)[0]
+            direction = self._direction(station, gk)
+            line = self._line_info(rid)
+            for secs, headsign in deps:
+                t = midnight + secs
+                if t >= now - 60:
+                    rows.append({"key": gk, **line, "direction": direction, "destination": headsign,
+                                 "time": t, "scheduled": t, "run": None, "live": False, "delayed": False,
+                                 "due": False, "arrival": t + travel * 60 if travel is not None else None})
             if len(deps) < 2:
                 continue
             mins = [secs / 60 for secs, _ in deps]
@@ -431,7 +491,6 @@ class CtaTracker:
                 g = [round(gap) for at, gap in gaps if start <= at < end and gap <= NO_SERVICE_GAP]
                 periods.append({"key": key, "label": label, "min": min(g) if g else None,
                                 "max": max(g) if g else None, "now": start <= now_min < end})
-            rid = gk.split(":", 1)[0]
             # Most frequent destination first; short trips that run a few times
             # a day (under 10% of trains) are left out of the label.
             counts: dict[str, int] = defaultdict(int)
@@ -441,15 +500,52 @@ class CtaTracker:
             all_night = mins[0] < 60 and mins[-1] >= 24 * 60 and max(gap for _, gap in gaps) <= 60
             upcoming = [m for m in mins if m >= now_min]
             out.append({
-                "key": gk, **self._line_info(rid), "label": " · ".join(headsigns),
+                "key": gk, **line, "label": " · ".join(headsigns), "direction": direction,
+                "travel_minutes": travel,
                 "first": midnight + deps[0][0], "last": midnight + deps[-1][0],
                 "all_night": all_night, "trains_left": len(upcoming), "count": len(deps),
                 "periods": periods,
             })
         order = {r: i for i, r in enumerate(LINE_ORDER)}
         out.sort(key=lambda g: (order.get(g["route_id"], 99), g["label"]))
-        return {"system": "cta", "station": info, "service_date": today.isoformat(), "groups": out,
+        rows.sort(key=lambda r: r["time"])
+        return {"system": "cta", "station": info, "to": self.station(to) if to else None,
+                "service_date": today.isoformat(), "downtown": (self._loop_dist(station) or 0) <= DOWNTOWN_M,
+                "groups": out, "departures": rows, "source": "schedule", "error": None, "as_of": None,
                 "server_time": now, "credit": CREDIT}
+
+    async def timetable_live(self, station: str, now: float | None = None, to: str | None = None) -> dict:
+        """timetable(), with Train Tracker's times for the next few trains of each
+        line and direction in place of the schedule's. Uses the same cached
+        arrivals as the board, so it costs no extra requests."""
+        now = time.time() if now is None else now
+        d = self.timetable(station, now, to)
+        if not self.live_enabled:
+            return d
+        try:
+            board = await self.arrivals(station, to=to, per_group=10, now=now)
+        except TrainTrackerError:
+            return d
+        if board["source"] != "live":
+            d["error"] = board["error"]
+            return d
+        directions = {g["key"]: g["direction"] for g in d["groups"]}
+        live_rows: list[dict] = []
+        last_live: dict[str, float] = {}
+        for g in board["groups"]:
+            for t in g["trains"]:
+                live_rows.append({"key": g["key"], "route_id": g["route_id"], "route_short": g["route_short"],
+                                  "route_name": g["route_name"], "color": g["color"], "text_color": g["text_color"],
+                                  "direction": directions.get(g["key"], self._direction(station, g["key"])),
+                                  "destination": t["destination"], "time": t["time"], "scheduled": None,
+                                  "run": t["run"], "live": t["live"], "delayed": t["delayed"], "due": t["due"],
+                                  "arrival": t.get("arrives")})
+                last_live[g["key"]] = max(last_live.get(g["key"], 0), t["time"])
+        # Live trains stand in for the scheduled ones up to the last live one.
+        rows = [r for r in d["departures"] if r["time"] > last_live.get(r["key"], 0) + LIVE_OVERLAP] + live_rows
+        rows.sort(key=lambda r: r["time"])
+        d.update(departures=rows, source="live", as_of=board["as_of"])
+        return d
 
     async def trains(self) -> dict:
         """Every L train's position (for the map)."""

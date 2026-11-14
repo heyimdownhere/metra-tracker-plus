@@ -227,6 +227,39 @@ def test_timetable_frequency_and_no_service_gaps(tmp_path, schedule):
     assert g["last"] == datetime(2026, 11, 10, 0, 30, tzinfo=TZ).timestamp()
 
 
+def test_timetable_lists_every_train_left_today(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, key=None)
+    d = t.timetable("40100", now=MON_0755)
+    assert d["downtown"]                                       # Clark/Lake: one list, no direction switch
+    rows = [(r["key"], r["destination"], datetime.fromtimestamp(r["time"], TZ).strftime("%H:%M")) for r in d["departures"]]
+    assert rows == [("G:5", "Ashland/63rd", "08:00"), ("Brn:Kimball", "Kimball", "08:00"),
+                    ("G:5", "Cottage Grove", "08:04"), ("G:5", "Ashland/63rd", "00:30")]
+    assert all(r["time"] == r["scheduled"] and not r["live"] for r in d["departures"])
+
+
+def test_timetable_directions_and_going_to(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, key=None)
+    d = t.timetable("40500", now=_at(7, 0))                    # Belmont, out of downtown
+    assert not d["downtown"]
+    assert [(r["destination"], r["direction"]) for r in d["departures"]] == [("Loop", "inbound"), ("Kimball", "outbound")]
+    d = t.timetable("40100", now=MON_0755, to="40200")         # Clark/Lake -> Roosevelt
+    rows = d["departures"]
+    assert {r["key"] for r in rows} == {"G:5"} and all(r["arrival"] - r["time"] == 300 for r in rows)
+
+
+def test_timetable_uses_live_times_for_the_next_trains(tmp_path, schedule):
+    t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=LIVE))
+    d = run(t.timetable_live("40100", now=MON_0755))
+    assert d["source"] == "live"
+    g5 = [(r["run"], r["live"], datetime.fromtimestamp(r["time"], TZ).strftime("%H:%M")) for r in d["departures"] if r["key"] == "G:5"]
+    # Live trains 605, 006, 607 (up to 08:10) replace the 08:00 and 08:04 scheduled ones; the
+    # 00:30 scheduled train is after them and stays.
+    assert g5 == [("605", True, "07:56"), ("006", True, "07:58"), ("607", True, "08:10"), (None, False, "00:30")]
+    assert [r["run"] for r in d["departures"] if r["key"] == "Brn:Kimball"] == ["404"]
+    times = [r["time"] for r in d["departures"]]
+    assert times == sorted(times)
+
+
 # ---- map, follow, alerts ------------------------------------------------------------------
 def test_positions_accept_a_single_train_object(tmp_path, schedule):
     body = {"ctatt": {"tmst": "2026-11-09T07:55:00", "errCd": "0", "route": [

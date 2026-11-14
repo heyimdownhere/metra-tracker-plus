@@ -92,11 +92,14 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings,
         return _json(await cta.arrivals(station, to=to or None, per_group=limit))
 
     @r.get("/timetable")
-    def timetable(station: str = Query(..., min_length=1, max_length=10)):
-        """How often trains come today at a station, with first and last trains."""
+    async def timetable(station: str = Query(..., min_length=1, max_length=10),
+                        to: str | None = Query(None, max_length=10, description="Only trains that go on to this station")):
+        """Every train still to come today at a station (live times for the next
+        few of each line and direction), and how often each line comes."""
         need_schedule()
         station_or_404(station)
-        return _json(cta.timetable(station))
+        station_or_404(to or None)
+        return _json(await cta.timetable_live(station, to=to or None))
 
     @r.get("/trains")
     async def trains():

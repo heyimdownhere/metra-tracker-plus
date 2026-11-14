@@ -101,7 +101,11 @@
   }
   async function refreshTimetable() {
     if (!st.active || !st.station) { st.timetable = null; return; }
-    try { st.timetable = await host.api(`/api/cta/timetable?station=${encodeURIComponent(st.station)}`); } catch (e) { console.warn(e); }
+    const id = st.station, q = `station=${encodeURIComponent(id)}${st.dest ? `&to=${encodeURIComponent(st.dest)}` : ""}`;
+    try {
+      const d = await host.api(`/api/cta/timetable?${q}`);
+      if (id === st.station) st.timetable = d;
+    } catch (e) { console.warn(e); }
   }
   async function refreshTrains() {
     if (!st.active || host.tab() === "timetable") return;
@@ -166,13 +170,16 @@
   // The status pill at the top: CTA's live data, not Metra's.
   function updatePill() {
     const pill = $("mode-pill");
-    const src = (st.board && st.board.source) || (st.trains && st.trains.source);
+    // Whichever the open tab last loaded: the board, the timetable, or the map's trains.
+    const shown = host.tab() === "timetable" ? st.timetable : st.board;
+    const src = (shown && shown.source) || (st.trains && st.trains.source);
+    const error = shown && shown.error;
     pill.classList.remove("live", "warn");
     if (src === "live") { pill.textContent = "Live"; pill.classList.add("live"); pill.title = "Live from CTA Train Tracker"; }
     else if (src) {
       pill.textContent = "Schedule only";
-      pill.title = (st.board && st.board.error) ? `CTA live data unavailable: ${st.board.error}` : "No CTA key on the server; showing the schedule.";
-      if (st.board && st.board.error) pill.classList.add("warn");
+      pill.title = error ? `CTA live data unavailable: ${error}` : "No CTA key on the server; showing the schedule.";
+      if (error) pill.classList.add("warn");
     } else { pill.textContent = "CTA"; pill.title = ""; }
   }
 
@@ -216,26 +223,88 @@
       : `${d.error ? "Live CTA data unavailable, showing the schedule. " : "CTA schedule (no live data). "}${d.credit}`;
   }
 
-  const PERIOD_SHORT = { am_rush: "AM rush", midday: "Midday", pm_rush: "PM rush", evening: "Evening", late: "Late" };
+  // Timetable tab: every train still to come today, laid out like Metra's (direction
+  // switch, one row per train). The next few trains of each line have live times.
+  st.ttDir = null;
+  function defaultDir() {
+    const p = st.profile || {};
+    const hm = new Date(host.serverNow() * 1000).toTimeString().slice(0, 5);
+    if (st.station && st.station === p.work_station) return "outbound";
+    return hm < (p.switch_time || "12:00") ? "inbound" : "outbound";
+  }
+  // How often trains come now on the lines shown, e.g. "every 4–8 min".
+  function howOften(groups) {
+    const now = groups.flatMap((g) => g.periods.filter((x) => x.now && x.min != null));
+    if (!now.length) return "";
+    const lo = Math.min(...now.map((x) => x.min)), hi = Math.max(...now.map((x) => x.max));
+    const range = lo === hi ? `${lo}` : `${lo}–${hi}`;
+    return `${new Set(groups.map((g) => g.route_id)).size > 1 ? "each line " : ""}every ${range} min now`;
+  }
   function renderTimetable() {
     if (!st.active) return;
+    updatePill();
     renderTitle();
     const tt = $("tt"), d = st.timetable;
-    $("board-updated").textContent = "CTA schedule";
-    if (!st.station) { tt.innerHTML = ""; host.showEmpty("Pick a CTA station to see how often trains come."); return; }
+    const now = host.serverNow();
+    $("board-updated").textContent = d && d.source === "live" ? `CTA · ${host.fmtTime(d.as_of)}` : "CTA schedule";
+    if (!st.station) { tt.innerHTML = ""; host.showEmpty("Pick a CTA station to see today's trains."); return; }
     if (!d) { tt.innerHTML = ""; host.showEmpty("Loading…"); return; }
-    host.showEmpty(d.groups.length ? "" : "No trains today.");
-    const range = (p) => (p.min == null ? "—" : p.min === p.max ? `${p.min}` : `${p.min}–${p.max}`);
-    tt.innerHTML = `<p class="tt-summary">Trains come every few minutes, so this shows how often (minutes between trains) instead of every time.</p>
-      <ul class="cta-freq">${d.groups.map((g) => `<li style="--line:${esc(g.color)}">
-        <div class="f-top">${host.chip(g.route_short, g.color, g.text_color)}<span>to ${esc(g.label)}</span></div>
-        <div class="f-grid">${g.periods.map((p) => `<div class="${p.now ? "now" : ""}"><b>${range(p)}</b><span>${esc(PERIOD_SHORT[p.key] || p.label)}${p.now ? " · now" : ""}</span></div>`).join("")}</div>
-        <div class="f-span">${g.all_night ? "<b>Runs all night</b>" : `First <b>${esc(host.fmtTime(g.first))}</b> · Last <b>${esc(host.fmtTime(g.last))}</b>`} · ${g.trains_left} more today</div>
-      </li>`).join("")}</ul>`;
+    host.showEmpty("");
+    const from = nameOf(st.station);
+    // Downtown (in the Loop) "toward downtown" means nothing: one list.
+    const split = !d.downtown && d.departures.some((r) => r.direction);
+    const dir = split ? (st.ttDir || (st.ttDir = defaultDir())) : null;
+    const rows = d.departures.filter((r) => !split || r.direction === dir);
+    const keys = new Set(rows.map((r) => r.key));
+    const groups = d.groups.filter((g) => keys.has(g.key));
+    const lines = [...new Set(rows.map((r) => r.route_id))];
+    const color = (rows[0] && rows[0].color) || "var(--accent)";
+    const last = rows.length ? rows[rows.length - 1].time : null;
+    const counts = rows.length ? `${rows.length} train${rows.length === 1 ? "" : "s"} left today · last ${host.fmtTime(last)}` : "No more trains today";
+    const often = howOften(groups);
+    const html = [`<div class="lt-hero" style="--line:${esc(color)}">
+        <div class="lt-sub lt-sub-only">${lines.length === 1 && rows[0] ? host.chip(rows[0].route_short, rows[0].color, rows[0].text_color) + " " : ""}${esc(counts)}${often ? ` · ${esc(often)}` : ""}${d.source === "live" ? ` · CTA data ${esc(host.fmtTime(d.as_of))}` : ""}</div>
+      </div>`];
+    if (split) {
+      html.push(`<div class="lt-dir" role="group" aria-label="Direction">
+        <button type="button" data-cta-dir="inbound" aria-pressed="${dir === "inbound"}">Toward downtown</button>
+        <button type="button" data-cta-dir="outbound" aria-pressed="${dir === "outbound"}">Away from downtown</button>
+      </div>`);
+    }
+    if (!rows.length) {
+      const where = split ? ` ${dir === "inbound" ? "toward" : "away from"} downtown` : "";
+      html.push(`<p class="muted tt-none">No more trains${where} from ${esc(from)} today${st.dest ? ` to ${esc(nameOf(st.dest))}` : ""}.</p>`);
+    } else {
+      const sel = host.selectedTrip();
+      const next = rows[0];
+      html.push('<ol class="lt-list tt-list">');
+      for (const r of rows) {
+        const mins = Math.round((r.time - now) / 60);
+        const status = r.delayed ? '<span class="badge cancel" title="CTA says this train is delayed">Delayed</span>'
+          : r.live ? '<span class="badge live">Live</span>' : "";
+        const arr = r.arrival ? `arrives ${esc(host.fmtTime(r.arrival))}` : "";
+        const trip = r.run ? ` data-trip="${tripId(r.run)}" data-route="${esc(r.route_id)}"` : "";
+        html.push(`<li class="lt-row${r === next ? " next" : ""}${r.run && sel === tripId(r.run) ? " selected" : ""}"${trip}>
+          <span class="lt-time">${host.bigTime(r.time)}</span>
+          <span class="lt-main"><span>${lines.length > 1 ? host.chip(r.route_short, r.color, r.text_color) + " " : ""}${esc(r.destination || r.route_name)}${r.run ? ` <span class="muted small">#${esc(r.run)}</span>` : ""}</span>
+            <span class="muted small">${[arr, status].filter(Boolean).join(" · ")}</span></span>
+          <span class="lt-in">${r.due || mins <= 0 ? "Now" : host.untilText(mins)}</span>
+        </li>`);
+      }
+      html.push("</ol>");
+    }
+    tt.innerHTML = html.join("");
     const dl = $("data-line");
     dl.hidden = false;
-    dl.textContent = d.credit;
+    dl.textContent = d.source === "live" ? d.credit
+      : `${d.error ? "Live CTA data unavailable, showing the schedule. " : "CTA schedule (no live data). "}${d.credit}`;
   }
+  $("tt").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-cta-dir]");
+    if (!b || !st.active) return;
+    st.ttDir = b.dataset.ctaDir;
+    renderTimetable();
+  });
 
   function render() {
     if (!st.active) return;

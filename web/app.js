@@ -1940,7 +1940,7 @@
 
   // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
   CTA.init({
-    api, esc, chip, enter, toast, fmtTime, bigTime, serverNow, mapView, applyView, showEmpty, renderMapHead,
+    api, esc, chip, enter, toast, fmtTime, bigTime, untilText, serverNow, mapView, applyView, showEmpty, renderMapHead,
     tab: () => state.tab,
     selectedTrip: () => state.selectedTrip,
     pickersShown: () => state.tab === "timetable" || view.pickers !== "hide" || pickersOpen,
