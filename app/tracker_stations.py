@@ -6,34 +6,43 @@ from __future__ import annotations
 from .static_gtfs import S_ARR, S_SEQ, S_STOP, T_ROUTE, _dist_m
 from .tracker_core import TrackerCore
 from .tracker_helpers import LOOP, AmbiguousStation, _norm_name
+from .util import StaticJson
 
 
 class StationQueries(TrackerCore):
     def station_label(self, station_id: str) -> str:
         """Display name; stations sharing a name get their line(s), e.g. 'Lake Forest (UP-N)'."""
         s = self.static
-        version, labels = self._labels
-        if version != s.version:
-            by_name: dict[str, list[str]] = {}
-            for sid in s.station_children:
-                by_name.setdefault(s.stops[sid]["name"], []).append(sid)
-            labels = {}
-            for name, sids in by_name.items():
-                for sid in sids:
-                    if len(sids) > 1:
-                        lines = sorted({s.trips[x[1]][T_ROUTE] for c in s.station_children[sid]
-                                        for x in s.stop_departures.get(c, [])})
-                        labels[sid] = f"{name} ({'/'.join(lines) or sid})"
-                    else:
-                        labels[sid] = name
-            self._labels = (s.version, labels)
-        return labels.get(station_id) or s.stop_name(station_id) or station_id
+        return self._once("labels", self._build_labels).get(station_id) or s.stop_name(station_id) or station_id
+
+    def _build_labels(self) -> dict[str, str]:
+        s = self.static
+        by_name: dict[str, list[str]] = {}
+        for sid in s.station_children:
+            by_name.setdefault(s.stops[sid]["name"], []).append(sid)
+        labels = {}
+        for name, sids in by_name.items():
+            for sid in sids:
+                if len(sids) > 1:
+                    lines = sorted({s.trips[x[1]][T_ROUTE] for c in s.station_children[sid]
+                                    for x in s.stop_departures.get(c, [])})
+                    labels[sid] = f"{name} ({'/'.join(lines) or sid})"
+                else:
+                    labels[sid] = name
+        return labels
 
     # ---- public queries --------------------------------------------------
     def stations(self) -> list[dict]:
-        s = self.static
-        if not s:
+        """Every station with its lines, A-Z. Built once per schedule."""
+        if not self.static:
             return []
+        return self._once("stations", self._build_stations)
+
+    def stations_json(self) -> StaticJson:
+        return self._once("stations_json", lambda: StaticJson(self.stations()))
+
+    def _build_stations(self) -> list[dict]:
+        s = self.static
         out = []
         for station_id, children in s.station_children.items():
             stop = s.stops[station_id]
@@ -58,11 +67,8 @@ class StationQueries(TrackerCore):
         s = self.static
         if not s:
             return []
-        cache = getattr(self, "_dest_cache", None)
-        if cache is None or cache[0] != s.version:
-            parent = {c: sid for sid, kids in s.station_children.items() for c in kids}
-            self._dest_cache = cache = (s.version, parent, {})
-        _, parent, memo = cache
+        parent, memo = self._once("destinations", lambda: (
+            {c: sid for sid, kids in s.station_children.items() for c in kids}, {}))
         if station_id in memo:
             return memo[station_id]
         try:
@@ -98,7 +104,7 @@ class StationQueries(TrackerCore):
             return _dist_m(home["lat"], home["lon"], st["lat"], st["lon"]) if st else float("inf")
 
         out = [{"id": d, "minutes": m, "direction": direc} for d, (m, direc) in best.items()]
-        out.sort(key=lambda r: (dist(r["id"]), r["id"]))
+        out.sort(key=lambda r: (dist(str(r["id"])), str(r["id"])))
         memo[station_id] = out
         return out
 

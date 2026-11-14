@@ -15,6 +15,7 @@ from __future__ import annotations
 import gzip
 import json
 import logging
+import math
 import mmap
 import os
 import re
@@ -26,14 +27,14 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import httpx
-from pmtiles.reader import Reader
-from pmtiles.tile import Compression, deserialize_directory, deserialize_header, zxy_to_tileid
+from pmtiles.tile import Compression, deserialize_directory, deserialize_header, find_tile, zxy_to_tileid
 from pmtiles.writer import Writer
+
+from .config import DEFAULT_BBOX
+from .util import TTLCache, atomic_write
 
 log = logging.getLogger(__name__)
 
-# Covers every Metra station (Kenosha to University Park, Harvard to the lake) with margin.
-DEFAULT_BBOX = (-88.75, 41.30, -87.40, 42.70)
 DEFAULT_MAX_ZOOM = 15
 BUILDS_JSON = "https://build-metadata.protomaps.dev/builds.json"
 BUILD_URL = "https://build.protomaps.com/{name}"
@@ -42,9 +43,26 @@ USER_AGENT = "next-stop/1.0 (self-hosted map extract)"
 
 # Asset paths the browser may ask for (fonts and sprites for the bundled styles).
 ASSET_RE = re.compile(
-    r"^(fonts/Noto Sans (Regular|Medium|Italic)/\d+-\d+\.pbf"
-    r"|sprites/v4/(light|dark)(@2x)?\.(json|png))$"
+    r"fonts/Noto Sans (?:Regular|Medium|Italic)/(\d{1,5})-(\d{1,5})\.pbf"
+    r"|sprites/v4/(?:light|dark)(?:@2x)?\.(?:json|png)"
 )
+# Fetching a missing font or sprite from Protomaps: give up quickly, and don't
+# ask again for a while after a failure.
+ASSET_TIMEOUT = httpx.Timeout(8.0, connect=4.0)
+ASSET_RETRY_SECONDS = 600
+
+
+def valid_asset(path: str) -> bool:
+    """A sprite, or a font file for a real block of 256 characters (0-255,
+    256-511, ... 65280-65535). Nothing else is ever fetched or served."""
+    m = ASSET_RE.fullmatch(path)
+    if not m:
+        return False
+    if m.group(1) is None:
+        return True
+    start, end = int(m.group(1)), int(m.group(2))
+    return start % 256 == 0 and end == start + 255 and end <= 65535
+
 PREFETCH_ASSETS = [
     *(f"fonts/Noto Sans {w}/{r}.pbf" for w in ("Regular", "Medium", "Italic")
       for r in ("0-255", "256-511", "8192-8447")),
@@ -57,8 +75,6 @@ MAX_BATCH = 16 * 1024 * 1024  # bytes per range request
 
 def tiles_in_bbox(bbox: tuple[float, float, float, float], z: int):
     """(x, y) of every tile at zoom z touching bbox (min_lon, min_lat, max_lon, max_lat)."""
-    import math
-
     def tx(lon):
         return int((lon + 180.0) / 360.0 * (1 << z))
 
@@ -96,7 +112,7 @@ def extract(get_bytes, out_path: Path, bbox, max_zoom: int, progress=None) -> di
     # 1. Walk the directory tree, descending only into leaves that cover wanted tiles.
     found: dict[int, tuple[int, int]] = {}  # tile_id -> (offset, length) in tile data
 
-    def any_wanted(lo: int, hi: int) -> bool:
+    def any_wanted(lo: int, hi: float) -> bool:
         i = bisect_left(wanted, lo)
         return i < len(wanted) and wanted[i] < hi
 
@@ -225,6 +241,51 @@ def find_latest_build(client: httpx.Client, today: date | None = None) -> str:
     raise RuntimeError("couldn't find a Protomaps build (set MAP_SOURCE to a .pmtiles URL)")
 
 
+class _Archive:
+    """An open map file: its bytes (memory-mapped), header, and the index
+    pages already decoded.
+
+    Decoding an index page is pure Python and takes several milliseconds, and
+    every tile lookup needs two of them. Keeping the decoded pages turns a
+    15-30 ms lookup into a few microseconds. The Chicago extract has a few
+    dozen pages (a few MB decoded).
+    """
+
+    MAX_PAGES = 256
+
+    def __init__(self, path: Path, stamp: int):
+        self.stamp = stamp
+        with open(path, "rb") as fh:
+            self.mm = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+        self.header = deserialize_header(self.mm[0:127])
+        self.gzip = self.header["tile_compression"] == Compression.GZIP
+        self._pages: dict[tuple[int, int], list] = {}
+
+    def _page(self, offset: int, length: int) -> list:
+        page = self._pages.get((offset, length))
+        if page is None:
+            page = deserialize_directory(self.mm[offset: offset + length])
+            if len(self._pages) >= self.MAX_PAGES:
+                self._pages.clear()
+            self._pages[(offset, length)] = page
+        return page
+
+    def tile(self, z: int, x: int, y: int) -> bytes | None:
+        tile_id = zxy_to_tileid(z, x, y)
+        h = self.header
+        offset, length = h["root_offset"], h["root_length"]
+        for _ in range(4):  # the format allows at most this many levels
+            entry = find_tile(self._page(offset, length), tile_id)
+            if entry is None:
+                return None
+            if entry.run_length == 0:  # points at a deeper index page
+                offset, length = h["leaf_directory_offset"] + entry.offset, entry.length
+            else:
+                start = h["tile_data_offset"] + entry.offset
+                return self.mm[start: start + entry.length]
+        return None
+
+
 class BaseMap:
     def __init__(self, config_dir: Path, enabled: bool = True, source: str | None = None,
                  bbox=DEFAULT_BBOX, max_zoom: int = DEFAULT_MAX_ZOOM, refresh_days: int = 30):
@@ -241,17 +302,20 @@ class BaseMap:
         self.error: str | None = None
         self.downloading = False
         self._lock = threading.Lock()
-        self._reader = None
-        self._reader_mtime = None
-        self._mm = None
-        self._fh = None
+        self._archive: _Archive | None = None
+        self._archive_lock = threading.Lock()
+        self._info: dict | None = None
+        self._asset_failed = TTLCache(ASSET_RETRY_SECONDS, max_items=1024)
 
     # ---- status ------------------------------------------------------------------
     def info(self) -> dict:
-        try:
-            return json.loads(self.state_path.read_text())
-        except (OSError, ValueError):
-            return {}
+        """What map.json says about the downloaded map (read once, then remembered)."""
+        if self._info is None:
+            try:
+                self._info = json.loads(self.state_path.read_text())
+            except (OSError, ValueError):
+                return {}
+        return self._info
 
     @property
     def available(self) -> bool:
@@ -297,9 +361,10 @@ class BaseMap:
                 summary = extract(src, self.path, self.bbox, self.max_zoom,
                                   progress=lambda **p: self.progress.update(p))
                 self.dir.mkdir(parents=True, exist_ok=True)
-                self.state_path.write_text(json.dumps({
+                atomic_write(self.state_path, json.dumps({
                     "source": url, "downloaded_at": time.time(), "bbox": self.bbox, **summary,
-                }, indent=2))
+                }, indent=2).encode())
+                self._info = None
                 log.info("Map: saved %.1f MB (%d tiles, %d requests) in %.0fs",
                          summary["size"] / 1e6, summary["tiles"], src.requests, time.monotonic() - started)
                 self._prefetch_assets(client)
@@ -318,55 +383,68 @@ class BaseMap:
                 log.info("Map: couldn't prefetch %s (%s)", path, exc)
 
     # ---- serving -----------------------------------------------------------------
-    def _get_reader(self):
-        mtime = self.path.stat().st_mtime
-        if self._reader is None or self._reader_mtime != mtime:
-            if self._mm is not None:
-                self._mm.close()
-                self._fh.close()
-            self._fh = open(self.path, "rb")
-            self._mm = mmap.mmap(self._fh.fileno(), 0, access=mmap.ACCESS_READ)
-            mm = self._mm
-            self._reader = Reader(lambda off, ln: mm[off: off + ln])
-            self._reader_mtime = mtime
-            self._compression = self._reader.header()["tile_compression"]
-        return self._reader
+    def _open(self) -> _Archive | None:
+        """The map file, opened once and reopened when a new download replaces it.
+
+        A request that is reading the old file while that happens keeps its own
+        reference and finishes normally; the old file is closed when the last
+        such request is done.
+        """
+        try:
+            stamp = self.path.stat().st_mtime_ns
+        except OSError:
+            return None
+        archive = self._archive
+        if archive is None or archive.stamp != stamp:
+            with self._archive_lock:
+                archive = self._archive
+                if archive is None or archive.stamp != stamp:
+                    archive = self._archive = _Archive(self.path, stamp)
+        return archive
 
     def tile(self, z: int, x: int, y: int) -> tuple[bytes | None, str | None]:
         """(tile bytes, content-encoding) or (None, None) if not in the extract."""
-        if not self.available or z < 0 or z > 30 or not (0 <= x < (1 << z)) or not (0 <= y < (1 << z)):
+        if z < 0 or z > 30 or not (0 <= x < (1 << z)) or not (0 <= y < (1 << z)):
             return None, None
-        reader = self._get_reader()
-        data = reader.get(z, x, y)
+        archive = self._open()
+        data = archive.tile(z, x, y) if archive else None
         if data is None:
             return None, None
-        encoding = "gzip" if self._compression == Compression.GZIP else None
-        return bytes(data), encoding
+        return data, ("gzip" if archive.gzip else None)
 
     def _fetch_asset(self, path: str, client: httpx.Client | None = None) -> Path:
         target = self.assets_dir / path
         if target.exists():
             return target
         own = client is None
-        client = client or httpx.Client(timeout=30, follow_redirects=True, headers={"User-Agent": USER_AGENT})
+        client = client or httpx.Client(timeout=ASSET_TIMEOUT, follow_redirects=True,
+                                        headers={"User-Agent": USER_AGENT})
         try:
-            r = client.get(f"{ASSETS_BASE}/{path}")
+            r = client.get(f"{ASSETS_BASE}/{path}", timeout=ASSET_TIMEOUT)
             r.raise_for_status()
         finally:
             if own:
                 client.close()
         target.parent.mkdir(parents=True, exist_ok=True)
-        tmp = target.with_name(target.name + ".tmp")
-        tmp.write_bytes(r.content)
-        os.replace(tmp, target)
+        atomic_write(target, r.content)
         return target
 
+    def cached_asset(self, path: str) -> Path | None:
+        """The font/sprite file if it is already on disk. Never uses the network."""
+        if not valid_asset(path):
+            return None
+        target = self.assets_dir / path
+        return target if target.is_file() else None
+
     def asset(self, path: str) -> Path | None:
-        """Font/sprite file, downloaded once from Protomaps' asset site and cached."""
-        if not ASSET_RE.match(path):
+        """Font/sprite file, downloaded once from Protomaps' asset site and cached.
+        Blocking: call it from a worker thread. A failed download isn't tried
+        again for ten minutes."""
+        if not valid_asset(path) or self._asset_failed.get(path):
             return None
         try:
             return self._fetch_asset(path)
         except Exception as exc:
+            self._asset_failed.put(path, True)
             log.info("Map: asset %s unavailable (%s)", path, exc)
             return None

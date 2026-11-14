@@ -98,16 +98,16 @@ class BoardQueries(MapQueries):
 
     def _terminal_index(self) -> dict[str, list[tuple[int, str, int]]]:
         """stop -> [(scheduled arrival, trip, seq)] for trips that end at that stop."""
-        s = self.static
-        if getattr(self, "_term_for", None) is not s:
+        def build() -> dict[str, list[tuple[int, str, int]]]:
             idx: dict[str, list[tuple[int, str, int]]] = {}
-            for tid, sts in s.trip_stops.items():
+            for tid, sts in self.static.trip_stops.items():
                 if len(sts) > 1 and sts[-1][S_ARR] is not None:
                     idx.setdefault(sts[-1][S_STOP], []).append((sts[-1][S_ARR], tid, sts[-1][S_SEQ]))
             for v in idx.values():
                 v.sort()
-            self._term_idx, self._term_for = idx, s
-        return self._term_idx
+            return idx
+
+        return self._once("terminals", build)
 
     def _terminal_arrivals(self, stop_ids: list[str], now: float, until: float) -> list[dict]:
         """Trains still to arrive today at the end of their trip at one of these stops."""

@@ -1,0 +1,28 @@
+# Settings for the checks CI runs (pytest, ruff, mypy). The app itself is not a package.
+[tool.ruff]
+line-length = 160
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "UP", "ASYNC"]
+ignore = [
+    "E731",   # small lambdas are used on purpose
+    "B008",   # FastAPI's Query(...) defaults
+    "B904",   # HTTPException raised inside except blocks on purpose
+    "UP035",  # typing.Callable etc. still read fine
+    "B905",   # zip(a, a[1:]) pairs neighbours: the lengths differ on purpose
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402", "B011", "E501", "E741"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+ignore_missing_imports = true
+check_untyped_defs = true
+warn_unused_ignores = true
+# The schedule is None until it has loaded. Every API route checks that once
+# (need_schedule) before calling the query methods, so inside them it is always
+# there; repeating the check in each method would only add noise.
+disable_error_code = ["union-attr"]

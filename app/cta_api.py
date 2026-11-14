@@ -7,27 +7,27 @@ Clark/Lake), never Metra's.
 
 from __future__ import annotations
 
-import csv
-import io
-from datetime import datetime
+import logging
+from datetime import date, datetime
 from typing import Callable
 
-from fastapi import APIRouter, Body, HTTPException, Query
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from .config import Settings, parse_switch_time, parse_work_days
-from .cta import TZ, CtaTracker, TrainTrackerError
+from .commute import SettingsChange, clean_changes, commute_leg
+from .config import Settings
+from .cta import TZ, CtaTracker, TrainTrackerError, local_hour
+from .cta_history import EXPORT_COLUMNS
+from .metra_api import export_headers, export_window
 from .user_settings import UserSettings
+from .util import StaticJson, csv_response, json_response as _json
 
-NO_STORE = {"Cache-Control": "no-store"}
-
-
-def _json(data, status: int = 200, headers: dict | None = None) -> JSONResponse:
-    return JSONResponse(data, status_code=status, headers=headers or NO_STORE)
+log = logging.getLogger(__name__)
 
 
-def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commute_leg: Callable) -> APIRouter:
-    r = APIRouter(prefix="/api/cta", tags=["CTA"])
+def make_router(cta: CtaTracker, store: UserSettings, settings: Settings,
+                leg: Callable = commute_leg, prefix: str = "/api/cta") -> APIRouter:
+    r = APIRouter(prefix=prefix, tags=["CTA"])
+    static: dict[str, tuple[str, StaticJson]] = {}
 
     def need_schedule():
         if not cta.enabled:
@@ -39,10 +39,18 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
         if station_id is not None and station_id not in cta.schedule.stations:
             raise HTTPException(404, f"Unknown CTA station {station_id!r}. See /api/cta/stations for ids.")
 
-    def profile() -> dict:
+    def once(name: str, build: Callable[[], object], headers: dict | None = None) -> StaticJson:
+        """An answer that only changes with the schedule, built once per schedule version."""
+        version = cta.schedule.version
+        hit = static.get(name)
+        if hit is None or hit[0] != version or hit[1] is None:
+            hit = static[name] = (version, StaticJson(build(), headers))
+        return hit[1]
+
+    def profile(cfg: dict | None = None) -> dict:
         """CTA home/work. Switch time and workdays fall back to COMMUTE_SWITCH_TIME
         and WORK_DAYS (they're about you, not the railroad); stations never do."""
-        cfg = store.load()
+        cfg = store.load() if cfg is None else cfg
         known = cta.schedule.stations if cta.schedule else {}
         home = cfg["home_station"] if cfg["home_station"] in known else None
         work = cfg["work_station"] if cfg["work_station"] in known else None
@@ -52,7 +60,7 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
             "switch_time": cfg["switch_time"] or settings.commute_switch_time,
             "work_days": list(cfg["work_days"] if cfg["work_days"] is not None else settings.work_days),
         }
-        p["leg"] = commute_leg(p, tz=TZ) if cta.schedule else None
+        p["leg"] = leg(p, tz=TZ) if cta.schedule else None
         return p
 
     @r.get("/status")
@@ -60,21 +68,21 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
         return _json(cta.status())
 
     @r.get("/stations")
-    def stations():
+    def stations(request: Request):
+        """Every L station. Only changes when the schedule does."""
         need_schedule()
-        return _json(cta.stations())
+        return once("stations", cta.stations).response(request)
 
     @r.get("/lines")
-    def lines():
+    def lines(request: Request):
         """L lines (id, names, colours) and their track shapes as GeoJSON."""
         need_schedule()
-        return _json({"lines": cta.lines(), "geojson": cta.lines_geojson()},
-                     headers={"Cache-Control": "public, max-age=300"})
+        return once("lines", lambda: {"lines": cta.lines(), "geojson": cta.lines_geojson()}).response(request)
 
     @r.get("/arrivals")
     async def arrivals(
-        station: str = Query(..., min_length=1, description="CTA station id, e.g. 40380 (Clark/Lake)"),
-        to: str | None = Query(None, description="Only trains that go on to this station"),
+        station: str = Query(..., min_length=1, max_length=10, description="CTA station id, e.g. 40380 (Clark/Lake)"),
+        to: str | None = Query(None, max_length=10, description="Only trains that go on to this station"),
         limit: int = Query(4, ge=1, le=10, description="Trains per line and direction"),
     ):
         """Next trains, one group per line and direction (live, or from the schedule)."""
@@ -84,7 +92,7 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
         return _json(await cta.arrivals(station, to=to or None, per_group=limit))
 
     @r.get("/timetable")
-    def timetable(station: str = Query(..., min_length=1)):
+    def timetable(station: str = Query(..., min_length=1, max_length=10)):
         """How often trains come today at a station, with first and last trains."""
         need_schedule()
         station_or_404(station)
@@ -97,8 +105,9 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
         return _json(await cta.trains())
 
     @r.get("/follow")
-    async def follow(run: str = Query(..., min_length=1, description="Run number, e.g. 409")):
-        """One train's remaining stops and position."""
+    async def follow(run: str = Query(..., min_length=1, max_length=4, description="Run number, e.g. 409")):
+        """One train's remaining stops and position. Only trains that are running
+        now (in the latest positions) are looked up."""
         need_schedule()
         try:
             return _json(await cta.follow(run))
@@ -116,10 +125,11 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
 
     def need_history():
         if not cta.history.available:
-            raise HTTPException(404, "CTA history is off (needs CTA_TRAIN_TRACKER_KEY and HISTORY_DAYS > 0)")
+            raise HTTPException(404, "CTA history is off (needs CTA_TRAIN_TRACKER_KEY and CTA_HISTORY_DAYS > 0)")
 
     @r.get("/history/station")
-    def history_station(station: str = Query(..., min_length=1), days: int = Query(30, ge=1, le=3650)):
+    def history_station(station: str = Query(..., min_length=1, max_length=10),
+                        days: int = Query(30, ge=1, le=3650)):
         """How regular each line/direction has been at a station, per day type and hour:
         share of waits that weren't long (more than twice the scheduled gap and 5+ min
         longer), average and scheduled gap, longest wait, trains flagged delayed."""
@@ -127,36 +137,41 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
         need_history()
         station_or_404(station)
         return _json({"station": cta.station(station), "days": days,
-                      "groups": cta.history.station_stats(station, days, lambda t: datetime.fromtimestamp(t, TZ).hour)})
+                      "groups": cta.history.station_stats(station, days, local_hour)})
 
     @r.get("/history/delays")
-    def history_delays(days: int = Query(7, ge=1, le=3650), route: str | None = Query(None)):
+    def history_delays(days: int = Query(7, ge=1, le=3650), route: str | None = Query(None, max_length=10)):
         """Trains Train Tracker flagged as delayed: per line totals and the list."""
         need_history()
         return _json({"days": days, "lines": cta.history.delay_summary(days),
                       "delays": cta.history.delays(days, route or None)})
 
     @r.get("/history/export.csv")
-    def history_export(days: int = Query(30, ge=1, le=3650)):
-        """Every recorded departure as CSV."""
+    def history_export(
+        days: int = Query(30, ge=1, le=3650, description="How many days, counting back from `end`"),
+        end: date | None = Query(None, description="Last day to include (YYYY-MM-DD); default today"),
+        station: str | None = Query(None, max_length=10, description="Only this station"),
+    ):
+        """Recorded departures as CSV, oldest first.
+
+        One download holds at most EXPORT_MAX_ROWS rows (250,000 unless
+        changed; the L records about 47,000 a day). If more match, you get the
+        newest ones and the header X-Export-Truncated: true; ask again with an
+        earlier `end`, or for one `station`, for the rest.
+        """
         need_history()
-        cols = ["service_date", "station", "gkey", "run", "t", "gap", "sched_gap", "delayed", "tracked"]
+        if station and cta.schedule:
+            station_or_404(station)
+        since, until = export_window(days, end, TZ)
+        info, rows = cta.history.export_arrivals(since, until, settings.export_max_rows, station or None)
 
-        def gen():
-            buf = io.StringIO()
-            w = csv.writer(buf)
-            w.writerow(cols)
-            for row in cta.history.iter_arrivals(days):
+        def readable():
+            for row in rows:
                 row["t"] = datetime.fromtimestamp(row["t"], TZ).isoformat(timespec="seconds")
-                w.writerow([row[c] for c in cols])
-                if buf.tell() > 65536:
-                    yield buf.getvalue()
-                    buf.seek(0)
-                    buf.truncate()
-            yield buf.getvalue()
+                yield row
 
-        return StreamingResponse(gen(), media_type="text/csv",
-                                 headers={"Content-Disposition": f'attachment; filename="cta-history-{days}d.csv"'})
+        name = f"cta-history-{station + '-' if station else ''}{days}d.csv"
+        return csv_response(name, EXPORT_COLUMNS, readable(), export_headers(info))
 
     @r.get("/settings")
     def get_settings():
@@ -164,47 +179,31 @@ def make_router(cta: CtaTracker, store: UserSettings, settings: Settings, commut
         return _json(profile())
 
     @r.put("/settings")
-    def put_settings(changes: dict = Body(...)):
+    def put_settings(body: SettingsChange):
         need_schedule()
-        for key in ("home_station", "home_dest", "work_station"):
-            if key in changes:
-                value = changes[key] or None
-                if value is not None and (not isinstance(value, str) or value not in cta.schedule.stations):
-                    raise HTTPException(400, f"Unknown CTA station for {key}: {value!r}")
-                changes[key] = value
-        if "switch_time" in changes and changes["switch_time"] not in (None, ""):
-            parsed = parse_switch_time(str(changes["switch_time"]))
-            if parsed is None:
-                raise HTTPException(400, "switch_time must be a time like 12:00")
-            changes["switch_time"] = parsed
-        elif "switch_time" in changes:
-            changes["switch_time"] = None
-        if "work_days" in changes and changes["work_days"] is not None:
-            days = parse_work_days(changes["work_days"])
-            if days is None:
-                raise HTTPException(400, "work_days must be weekdays like [0,1,2,3,4] (Monday = 0) or 'mon-fri'")
-            changes["work_days"] = list(days)
-        merged = {**store.load(), **{k: v for k, v in changes.items()}}
-        if merged.get("home_station") and merged.get("home_station") == merged.get("work_station"):
-            name = cta.schedule.stations[merged["home_station"]]["name"]
-            raise HTTPException(400, f"Home and work can't both be {name}. Pick a different station for one of them.")
-        try:
-            store.update(changes)
-        except OSError as exc:
-            raise HTTPException(500, f"Could not save CTA settings: {exc}")
-        return _json(profile())
+        changes = clean_changes(body, lambda sid: sid in cta.schedule.stations, what="CTA station")
 
-    async def board(from_id: str, to_id: str | None, limit: int, extra: dict):
-        return _json({**await cta.arrivals(from_id, to=to_id, per_group=limit), **extra})
+        def check(saved: dict) -> None:
+            if saved.get("home_station") and saved.get("home_station") == saved.get("work_station"):
+                name = cta.schedule.stations[saved["home_station"]]["name"]
+                raise HTTPException(400, f"Home and work can't both be {name}. Pick a different station for one of them.")
+
+        try:
+            store.update(changes, check)
+        except OSError as exc:
+            log.warning("Could not save CTA settings: %s", exc)
+            raise HTTPException(500, f"Could not save CTA settings ({exc.__class__.__name__}). Check that /config is writable.")
+        return _json(profile())
 
     @r.get("/now")
     async def now_board(limit: int = Query(4, ge=1, le=10)):
         """The CTA board for right now: home -> work before the switch time on
         workdays, work -> home after it, otherwise the home board."""
         need_schedule()
-        leg = profile()["leg"]
-        if not leg:
+        current = profile()["leg"]
+        if not current:
             raise HTTPException(404, "No CTA home station set")
-        return await board(leg["from"], leg["to"], limit, {"leg": leg["leg"]})
+        return _json({**await cta.arrivals(current["from"], to=current["to"], per_group=limit),
+                      "leg": current["leg"]})
 
     return r

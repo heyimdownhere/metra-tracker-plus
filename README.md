@@ -90,6 +90,16 @@ GitHub builds and publishes a ready-to-run image (`ghcr.io/heyimdownhere/next-st
 
 **Using it away from home:** put the server on a private network such as Tailscale or WireGuard. Don't port-forward the app to the internet: it has no login.
 
+### Security
+
+The app has no login: anyone who can reach the port can read your home and work stations and change them. Keep it on your home network or a private network (above). Beyond that:
+
+- **`ALLOWED_HOSTS`**: list the names you open the app by (e.g. `192.168.1.20,nextstop.lan`). Requests for any other name are refused, which stops a web page you visit from reaching the app through a trick called DNS rebinding. Empty (the default) accepts any name.
+- **Not root:** the app runs as user `99`, group `100` (Unraid's `nobody:users`), set with `PUID`/`PGID`. On the first start after updating, files in appdata that older versions wrote as root are handed over to that user.
+- **Keys** are never written to the log (shown masked in the settings summary).
+- **The page** is only allowed to run this server's own scripts, and the schedule cache can only hold schedule data.
+- Settings changes are limited to 64 KB and checked before anything is saved.
+
 ### docker compose
 
 ```sh
@@ -108,7 +118,7 @@ Then use `next-stop:latest` as the image (Unraid: the template's **Repository** 
 
 ### Backing up
 
-`/config/history.db` holds the delay history (about 1 GB a year at the default 365 days). Unraid's **Appdata Backup** plugin backs up the appdata folder with your other containers. `/config/gtfs/` and `/config/map/` are caches and don't need backing up.
+`/config/history.db` holds the Metra delay history (about 0.6 GB a year at the default 365 days) and `/config/cta-history.db` the CTA history (about 240 MB at the default 90 days). Unraid's **Appdata Backup** plugin backs up the appdata folder with your other containers. `/config/gtfs/` and `/config/map/` are caches and don't need backing up.
 
 ## The map
 
@@ -140,18 +150,22 @@ Everything is optional; with nothing set the app runs schedule-only and asks for
 | `CTA_TRAIN_TRACKER_KEY_FILE` | *(empty)* | Read the CTA key from a file instead. The variable wins if both are set. |
 | `CTA_ENABLED` | `true` | `false` turns the CTA side off and skips downloading CTA's schedule (~50 MB, checked daily, downloaded only when it changes). |
 | `CTA_STATIC_CHECK_HOURS` | `24` | Hours between checks for a new CTA schedule (1–720). |
+| `CTA_HISTORY_DAYS` | `90` | Days of CTA history to keep (0–3650). `0` turns CTA history off. The L makes about 47,000 rows a day, about 2.6 MB a day. |
 | `HOME_STATION` | *(empty)* | Default home station: an id (`NAPERVILLE`) or a name. Ids are at `/api/stations`. |
 | `HOME_DESTINATION` | *(empty)* | Default "Going to" for the home board (when no work station is set). |
 | `WORK_STATION` | *(empty)* | Work station. On workdays the app opens on home → work before the switch time, work → home after. Can't be the same as home. |
 | `COMMUTE_SWITCH_TIME` | `12:00` | When to switch from trains to work to trains home (24-hour `HH:MM`). |
 | `WORK_DAYS` | `mon-fri` | Commute days, e.g. `mon-fri`, `mon,tue,thu`. Other days open on the home board. |
 | `TZ` | `America/Chicago` | Container time zone (logs). The app always uses Metra's Chicago time. |
-| `HISTORY_DAYS` | `365` | Days of delay history to keep (0–3650). `0` disables history. |
+| `HISTORY_DAYS` | `365` | Days of Metra delay history to keep (0–3650). `0` disables history. |
 | `REALTIME_INTERVAL` | `30` | Seconds between realtime polls (30–3600). Metra's minimum is 30. |
 | `STATIC_CHECK_INTERVAL` | `3600` | Seconds between checks for a new schedule (60–86400). Doesn't affect the 30-second train updates. |
 | `STATIC_FULL_REFRESH_DAYS` | `7` | Re-download the whole schedule this often even if Metra says it hasn't changed (0 turns it off). |
 | `PORT` | `8080` | Port the app listens on **inside** the container. To change the port you open in the browser, change the host side of the port mapping instead (Unraid "Web UI port", compose `WEB_PORT`). |
 | `HOST` | `0.0.0.0` | Address the app listens on inside the container. |
+| `ALLOWED_HOSTS` | *(empty)* | Host names the app answers to, comma-separated (see "Security"). Empty = any. |
+| `PUID` / `PGID` | `99` / `100` | User and group the app runs as inside the container (see "Security"). |
+| `EXPORT_MAX_ROWS` | `250000` | Most rows one CSV export returns (1,000–5,000,000). See "Exports". |
 | `MAP_DOWNLOAD` | `true` | Download the self-hosted map (see "The map"). `false` skips it. |
 | `MAP_MAX_ZOOM` | `15` | Most detailed map level to download (8–15). `14` is roughly a quarter of the size. |
 | `MAP_REFRESH_DAYS` | `30` | Re-download the map after this many days (`0` = never). |
@@ -172,7 +186,9 @@ Everything is optional; with nothing set the app runs schedule-only and asks for
 
 ## API
 
-All endpoints read the server's in-memory copy of Metra's data. **No request to this app ever triggers a request to Metra.** A single background job polls Metra's realtime feeds, and the poll function itself refuses to run more than once every 30 seconds, whatever calls it.
+Each transit system has its API under `/api/<system>/`: `/api/metra/...` and `/api/cta/...` (`GET /api/systems` lists them). Metra's endpoints are also at `/api/...` as before, so existing Home Assistant sensors keep working; the tables below use those shorter paths.
+
+All Metra endpoints read the server's in-memory copy of Metra's data. **No request to this app ever triggers a request to Metra.** A single background job polls Metra's realtime feeds, and the poll function itself refuses to run more than once every 30 seconds, whatever calls it.
 
 Which way a train is going (`inbound`/`outbound`) is decided by geography: a train is inbound if its last stop is closer to the Loop than your station.
 
@@ -194,9 +210,10 @@ Example: `curl "http://<your-server-ip>:8080/api/next?station=NAPERVILLE&directi
 
 | Endpoint | Description |
 |---|---|
-| `GET /healthz` | Health check. Returns 200 once the schedule is loaded, otherwise 503. |
+| `GET /healthz` | Health check. Returns 200 once any system's schedule is loaded (so CTA keeps working if Metra's site is down), otherwise 503. `systems` lists each one. |
+| `GET /api/systems` | The transit systems and where their API is. |
 | `GET /api/status` | Mode, feed health, schedule version, map status, history stats. |
-| `GET /api/stations` | Stations with the lines that serve them. |
+| `GET /api/stations` | Stations with the lines that serve them. Sent with an ETag: unchanged lists cost an empty 304. |
 | `GET /api/next?station=ID&direction=inbound` | **Next trains** at a station. `direction`: `inbound`/`to` = toward downtown, `outbound`/`from` = away, omit for both. `station` takes an id or a name. Optional `limit` (1–20). |
 | `GET /api/departures?station=ID&limit=5[&to=ID][&direction=inbound]` | Departure board (`limit` 1–50); with `to`, only trains that later stop there. |
 | `GET /api/line?route=ID[&direction=inbound]` | Every train on a line still to run today (running first): where it starts and ends, next stop and delay for running trains. Used by the Map tab's line panel. |
@@ -211,29 +228,41 @@ Example: `curl "http://<your-server-ip>:8080/api/next?station=NAPERVILLE&directi
 | `GET /api/lines` | GeoJSON of every line. |
 | `GET /api/history/station?station=ID&days=30` | On-time %, average and worst delay, and cancellations per scheduled departure. |
 | `GET /api/history/alerts?days=30` | Every alert seen. |
-| `GET /api/history/export.csv?days=30` | Raw history as CSV. |
-| `GET /api/docs` | Interactive API docs. |
+| `GET /api/history/export.csv?days=30[&end=YYYY-MM-DD]` | Raw history as CSV (see "Exports"). |
+| `GET /api/docs` | Interactive API docs (served by this server). |
 
 ### CTA (`/api/cta/...`)
 
-The CTA 'L' side is kept apart from Metra: CTA station ids (e.g. `40380` Clark/Lake, listed at `/api/cta/stations`), its own home/work in `/config/cta-settings.json`, and its schedule cache in `/config/cta`. Unlike Metra, Train Tracker is only asked when someone is looking, each answer is reused for 30 s, and the server stops at 80,000 requests a day (CTA's limit is 100,000), falling back to the schedule. The key goes in the request address, as CTA requires; it is blanked out of the logs.
+The CTA 'L' side is kept apart from Metra: CTA station ids (e.g. `40380` Clark/Lake, listed at `/api/cta/stations`), its own home/work in `/config/cta-settings.json`, and its schedule cache in `/config/cta`. Unlike Metra, Train Tracker is only asked when someone is looking, each answer is reused for 30 s, and the server stops at 80,000 requests a day (CTA's limit is 100,000), falling back to the schedule. 4,000 of those are kept for the history recorder, and the day's count survives a restart. If CTA doesn't answer within 8 seconds, boards show the schedule, and CTA isn't asked again for 30 seconds. The key goes in the request address, as CTA requires; it is blanked out of the logs.
 
 | Endpoint | What it returns |
 |---|---|
 | `/api/cta/arrivals?station=40380[&to=41320][&limit=4]` | Next trains, one group per line and direction (southbound Green trains to Ashland/63rd and Cottage Grove share a group). Live, or from the schedule. With `to`: only trains going there, with an estimated arrival. |
 | `/api/cta/timetable?station=40380` | How often trains come today (AM rush, midday, PM rush, evening, late night), first and last train. |
 | `/api/cta/trains` | Every L train's position, heading and next stop. |
-| `/api/cta/follow?run=409` | One train's remaining stops. |
+| `/api/cta/follow?run=409` | One train's remaining stops. Only runs in the latest positions are looked up; others get 404 without asking CTA. |
 | `/api/cta/alerts` | CTA alerts for L lines and stations (bus-only alerts left out). |
 | `/api/cta/lines`, `/api/cta/stations` | Lines with colours and track shapes; stations. |
 | `/api/cta/settings` (GET/PUT), `/api/cta/now` | CTA home/work and the board for right now. |
 | `/api/cta/follow?run=409` → `passed` | Stations the train already left, with the time it was seen there (`tracked`) or estimated from the schedule (`estimated`), and its delays today. |
 | `/api/cta/history/station?station=40380[&days=30]` | How regular each line/direction has been, per day type and hour. |
 | `/api/cta/history/delays[?days=7&route=G]` | Trains CTA flagged as delayed: totals per line and each delay (where, when, how long). |
-| `/api/cta/history/export.csv[?days=30]` | Every recorded departure. |
+| `/api/cta/history/export.csv[?days=30][&end=YYYY-MM-DD][&station=40380]` | Recorded departures as CSV (see "Exports"). |
 | `/api/cta/status` | Schedule version, last live data, requests used today. |
 
-**CTA history** (`/config/cta-history.db`, kept for `HISTORY_DAYS`, needs the CTA key). CTA doesn't say how many minutes late an L train is, and L trains aren't tied to timetable trips, so "on time" for the L means *trains came as often as scheduled*. Every 30 s the server checks train positions (about 2,900 requests a day); when a train moves on from a station, that's a departure, saved with the gap since the previous train in the same line and direction and the scheduled gap at that time. A gap more than twice the scheduled one and at least 5 minutes longer is a **long wait**. Each board group then gets, once there are 5+ days of data, "92% on time · every 7 min (scheduled 6) · longest wait 18 min · 2 delays this week" for that time of day and kind of day. Trains CTA flags as delayed (stopped moving) are logged with where and how long.
+**CTA history** (`/config/cta-history.db`, kept for `CTA_HISTORY_DAYS`, default 90, needs the CTA key). CTA doesn't say how many minutes late an L train is, and L trains aren't tied to timetable trips, so "on time" for the L means *trains came as often as scheduled*. Every 30 s the server checks train positions (about 2,900 requests a day); when a train moves on from a station, that's a departure, saved with the gap since the previous train in the same line and direction and the scheduled gap at that time. A gap more than twice the scheduled one and at least 5 minutes longer is a **long wait**. Each board group then gets, once there are 5+ days of data, "92% on time · every 7 min (scheduled 6) · longest wait 18 min · 2 delays this week" for that time of day and kind of day. Trains CTA flags as delayed (stopped moving) are logged with where and how long.
+
+### Exports
+
+Both CSV exports are streamed a chunk at a time, oldest row first, and one download holds at most `EXPORT_MAX_ROWS` rows (250,000 by default: about 5 days of CTA history, or several weeks of Metra's). If more rows match, you get the **newest** ones, and the response says so in its headers:
+
+| Header | Meaning |
+|---|---|
+| `X-Export-Total-Rows` | Rows that matched. |
+| `X-Export-Rows` | Rows in this download. |
+| `X-Export-Truncated` | `true` if rows were left out. |
+
+To get the rest, ask again with an earlier `end` (the last day to include), a smaller `days`, or for CTA one `station`. For example, a month of CTA history a week at a time: `...export.csv?days=7&end=2026-11-07`, then `&end=2026-10-31`, and so on.
 
 CTA data is used under CTA's Developer License Agreement: "Data provided by CTA. Not affiliated with or endorsed by CTA."
 
@@ -242,6 +271,7 @@ CTA data is used under CTA's Developer License Agreement: "Data provided by CTA.
 ```sh
 pip install -r requirements-dev.txt
 CONFIG_DIR=./config uvicorn app.main:app --reload --port 8080
+ruff check . && mypy            # lint and type checks (CI runs them too)
 pytest                          # unit tests (synthetic GTFS + GTFS-RT)
 METRA_LIVE_TESTS=1 pytest       # also parse Metra's real static feed
 ```

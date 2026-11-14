@@ -12,6 +12,7 @@ import logging
 import math
 import time
 from datetime import date
+from typing import Any, Callable
 
 import httpx
 
@@ -33,7 +34,8 @@ class TrackerCore:
         self.settings = settings
         self.cache = StaticCache(settings.config_dir)
         self.history = History(settings.config_dir / "history.db", settings.history_days)
-        self.static: StaticData | None = None
+        self._static: StaticData | None = None
+        self._derived: dict[str, Any] = {}
         self.static_error: str | None = None
         self.static_checked_at: float | None = None
         self.rt = rtp.RealtimeSnapshot()
@@ -51,8 +53,35 @@ class TrackerCore:
         self._last_rt_poll: float | None = None
         # trip_id -> GPS-based estimate for trains with a position but no trip update.
         self._gps: dict[str, dict] = {}
-        self._labels: tuple[str | None, dict[str, str]] = (None, {})
+        # What was last written to history for each (day, trip, stop), so a
+        # prediction that hasn't changed isn't written again every 30 s.
+        self._recorded: dict[tuple, tuple] = {}
         self.rt_polls = 0
+
+    # ---- the schedule in use -----------------------------------------------
+    @property
+    def static(self) -> StaticData | None:
+        return self._static
+
+    @static.setter
+    def static(self, data: StaticData | None) -> None:
+        """Swap the schedule. Everything worked out from the old one (station
+        names, the stations list, the lines, the map's train list) goes with it."""
+        self._static = data
+        self._derived = {}
+        self._trains_cache = None
+
+    def _once(self, name: str, build: Callable[[], Any]) -> Any:
+        """Something worked out from the schedule: built on first use, kept
+        until the schedule changes. New caches need no clearing code."""
+        derived = self._derived
+        if name not in derived:
+            derived[name] = build()
+        return derived[name]
+
+    @property
+    def loaded(self) -> bool:
+        return self._static is not None
 
     # ---- lifecycle -------------------------------------------------------
     async def start(self) -> None:
@@ -151,7 +180,8 @@ class TrackerCore:
             r = await self._client.get(self.settings.static_url)
             r.raise_for_status()
             content = r.content
-            if self.static and await asyncio.to_thread(self.cache.same_as_current, content):
+            unchanged: bool = bool(self.static) and await asyncio.to_thread(self.cache.same_as_current, content)
+            if unchanged:
                 await asyncio.to_thread(self.cache.mark_checked)
                 log.info("Schedule unchanged (%s)", current)
                 self.static_error = None
@@ -179,8 +209,6 @@ class TrackerCore:
             log.info("Now using schedule %s (previous kept as backup: %s)", version, current)
             self.static = data
             self.static_error = None
-            self._trains_cache = None
-            self._labels = (None, {})
             self._reindex_realtime()
             self._gps = self._gps_estimates(time.time())
             return True
@@ -251,12 +279,19 @@ class TrackerCore:
         if self.history.available:
             try:
                 rows = self._observation_rows(time.time()) if updates is not None else []
-                await asyncio.to_thread(self.history.record_observations, rows)
+                await asyncio.to_thread(self.history.record_observations, self._changed_rows(rows))
+                self._recorded = {r[:3]: r[3:] for r in rows}
                 if alerts is not None:
                     await asyncio.to_thread(self.history.record_alerts, self.rt.alerts)
             except Exception:
                 log.exception("Recording history failed")
         return True
+
+    def _changed_rows(self, rows: list[tuple]) -> list[tuple]:
+        """The rows that differ from what was last written. Most predictions
+        don't change between two polls, and writing them again only wears the disk."""
+        recorded = self._recorded
+        return [r for r in rows if recorded.get(r[:3]) != r[3:]]
 
     def _observation_rows(self, now: float) -> list[tuple]:
         """Current predictions for every upcoming stop of every realtime trip."""
@@ -417,7 +452,7 @@ class TrackerCore:
             return None
 
         # Propagate delay from the most recent upstream update.
-        up = sched_by_seq.get(best_seq)
+        up = sched_by_seq.get(best_seq) if best_seq is not None else None
         delay = best.departure_delay if best.departure_delay is not None else best.arrival_delay
         if delay is None and up is not None:
             if best.departure_time:
@@ -576,9 +611,8 @@ class TrackerCore:
             "agency": s.agency_name if s else "Metra",
             "routes": list(s.routes.values()) if s else [],
             "realtime_interval": self.settings.realtime_interval,
-            "realtime_age": (
-                round(self.rt.data_age("tripupdates")) if self.rt.data_age("tripupdates") is not None else None
-            ) if self.settings.realtime_enabled else None,
+            "realtime_age": round(age) if (age := self.rt.data_age("tripupdates")) is not None
+            and self.settings.realtime_enabled else None,
             "generated_at": time.time(),
             "history": self.history.stats(),
             "feeds": {

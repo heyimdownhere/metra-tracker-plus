@@ -10,9 +10,13 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-import threading
 import time
+from datetime import date
 from pathlib import Path
+from typing import Iterator
+
+from .sqlite_store import SqliteStore
+from .util import TTLCache
 
 log = logging.getLogger(__name__)
 
@@ -84,7 +88,6 @@ ON_TIME_SECONDS = 6 * 60
 
 def day_type(service_date: str | None) -> str:
     """'weekday', 'saturday' or 'sunday' for a YYYY-MM-DD service date."""
-    from datetime import date
     try:
         wd = date.fromisoformat(service_date or "").weekday()
     except ValueError:
@@ -103,41 +106,17 @@ def _summarize(g: dict) -> dict:
     }
 
 
-class History:
+class History(SqliteStore):
+    SCHEMA_VERSION = 1
+    LABEL = "History"
+
     def __init__(self, path: Path, retention_days: int):
-        self.path = path
-        self.retention_days = retention_days
-        self._lock = threading.Lock()
-        self._db: sqlite3.Connection | None = None
-        self._stats_cache: tuple[float, dict] | None = None
-        self._dep_cache: dict[tuple, tuple[float, dict]] = {}
+        super().__init__(path, retention_days)
+        self._stats_cache = TTLCache(300)   # COUNT(*) scans the table, which grows all year
+        self._dep_cache = TTLCache(900)     # board stats per station
 
-    @property
-    def enabled(self) -> bool:
-        return self.retention_days > 0
-
-    @property
-    def available(self) -> bool:
-        """Enabled and the database is open (it only opens when realtime is on)."""
-        return self._db is not None
-
-    def open(self) -> None:
-        if not self.enabled:
-            return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA synchronous=NORMAL")
+    def _migrate(self, db: sqlite3.Connection, version: int) -> None:
         db.executescript(SCHEMA)
-        db.row_factory = sqlite3.Row
-        self._db = db
-        log.info("History database at %s (retention %d days)", self.path, self.retention_days)
-
-    def close(self) -> None:
-        with self._lock:
-            if self._db:
-                self._db.close()
-                self._db = None
 
     # ---- writes ---------------------------------------------------------
     def record_observations(self, rows: list[tuple]) -> None:
@@ -150,14 +129,7 @@ class History:
             (d, t, st, r, h, seq, sched, pred, delay, delay, int(c), reason, now, now)
             for (d, t, st, r, h, seq, sched, pred, delay, c, reason) in rows
         ]
-        with self._lock:
-            self._db.execute("BEGIN")
-            try:
-                self._db.executemany(UPSERT_OBS, params)
-                self._db.execute("COMMIT")
-            except Exception:
-                self._db.execute("ROLLBACK")
-                raise
+        self._write_many(UPSERT_OBS, params)
 
     def record_alerts(self, alerts) -> None:
         if not self._db or not alerts:
@@ -183,12 +155,6 @@ class History:
         return n
 
     # ---- reads ----------------------------------------------------------
-    def _query(self, sql: str, params: tuple = ()) -> list[dict]:
-        if not self._db:
-            return []
-        with self._lock:
-            return [dict(r) for r in self._db.execute(sql, params).fetchall()]
-
     def _grouped_stats(self, stop_ids: list[str], days: int, hhmm_fn) -> dict[tuple, dict]:
         """On-time stats per (route, scheduled HH:MM, destination, day type).
 
@@ -226,15 +192,13 @@ class History:
         out.sort(key=lambda x: (x["day_type"], x["scheduled_time"], x["route_id"] or ""))
         return out
 
-    def departure_stats(self, stop_ids: list[str], days: int, hhmm_fn, max_age: float = 900) -> dict[tuple, dict]:
+    def departure_stats(self, stop_ids: list[str], days: int, hhmm_fn) -> dict[tuple, dict]:
         """Like station_reliability, keyed for lookup from the departure board. Cached."""
         key = (tuple(sorted(stop_ids)), days)
         cached = self._dep_cache.get(key)
-        if cached and time.monotonic() - cached[0] < max_age:
-            return cached[1]
-        result = self._grouped_stats(stop_ids, days, hhmm_fn)
-        self._dep_cache[key] = (time.monotonic(), result)
-        return result
+        if cached is None:
+            cached = self._dep_cache.put(key, self._grouped_stats(stop_ids, days, hhmm_fn))
+        return cached
 
     def alerts(self, days: int) -> list[dict]:
         since = int(time.time()) - days * 86400
@@ -245,48 +209,27 @@ class History:
             r["routes"] = json.loads(r["routes"] or "[]")
         return rows
 
-    def iter_observations(self, days: int, batch: int = 5000):
-        """Stream observations in batches on a separate read-only connection.
+    def export_observations(self, since: float, until: float, limit: int) -> tuple[dict, Iterator[dict]]:
+        """Observations scheduled in [since, until), oldest first, at most about
+        `limit` rows (the newest ones if there are more). See SqliteStore._export."""
+        return self._export("stop_observations", "scheduled", "scheduled >= ? AND scheduled < ?",
+                            (int(since), int(until)), limit)
 
-        WAL mode lets this read run alongside the poller's writes, so a large
-        export neither loads everything into memory nor blocks recording.
-        """
-        if not self._db:
-            return
-        since = int(time.time()) - days * 86400
-        db = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, check_same_thread=False)
-        db.row_factory = sqlite3.Row
-        try:
-            cur = db.execute(
-                "SELECT * FROM stop_observations WHERE scheduled >= ? ORDER BY scheduled", (since,)
-            )
-            while True:
-                rows = cur.fetchmany(batch)
-                if not rows:
-                    break
-                for r in rows:
-                    yield dict(r)
-        finally:
-            db.close()
-
-    def stats(self, max_age: float = 300) -> dict:
-        """Row counts and size. Cached: COUNT(*) scans the table, which grows all year."""
+    def stats(self) -> dict:
+        """Row counts and size. Cached for a few minutes."""
         if not self._db:
             return {"enabled": False}
-        cached = self._stats_cache
-        if cached and time.monotonic() - cached[0] < max_age:
-            return cached[1]
+        cached = self._stats_cache.get("stats")
+        if cached is not None:
+            return cached
         with self._lock:
             n = self._db.execute("SELECT COUNT(*), MIN(scheduled) FROM stop_observations").fetchone()
             a = self._db.execute("SELECT COUNT(*) FROM alerts_log").fetchone()
-        size = sum(p.stat().st_size for p in self.path.parent.glob(self.path.name + "*") if p.exists())
-        result = {
+        return self._stats_cache.put("stats", {
             "enabled": True,
             "retention_days": self.retention_days,
             "observations": n[0],
             "oldest": n[1],
             "alerts": a[0],
-            "size_bytes": size,
-        }
-        self._stats_cache = (time.monotonic(), result)
-        return result
+            "size_bytes": self.size_bytes(),
+        })

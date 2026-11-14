@@ -209,7 +209,7 @@ def test_after_midnight_trains_belong_to_yesterday(tmp_path, schedule):
 
 
 def test_daily_budget_falls_back_to_schedule(tmp_path, schedule, monkeypatch):
-    monkeypatch.setattr(cta_mod, "DAILY_BUDGET", 0)
+    monkeypatch.setattr("app.cta_live.DAILY_BUDGET", 0)
     t = _tracker(tmp_path, schedule, lambda r: httpx.Response(200, json=LIVE))
     d = run(t.arrivals("40100", now=MON_0755))
     assert d["source"] == "schedule" and "budget" in d["error"]

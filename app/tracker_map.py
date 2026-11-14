@@ -9,6 +9,7 @@ import time
 from .static_gtfs import S_ARR, S_DEP, S_SEQ, S_STOP, T_DIRECTION, T_ROUTE, T_SERVICE, T_SHAPE, T_SHORT_NAME
 from .tracker_helpers import SNAP_MAX_M, STALE_VEHICLE_SECONDS
 from .tracker_stations import StationQueries
+from .util import StaticJson
 
 
 class MapQueries(StationQueries):
@@ -59,6 +60,7 @@ class MapQueries(StationQueries):
         if self._trains_cache and now - self._trains_cache[0] < 10:
             # Fresh timestamp: the app uses it to correct the phone's clock.
             return {**self._trains_cache[1], "generated_at": now}
+        result: dict
         if self.settings.realtime_enabled and self.rt.fresh("positions"):
             result = {"source": "realtime", "trains": self._live_trains(now)}
         else:
@@ -230,10 +232,17 @@ class MapQueries(StationQueries):
         return out
 
     def lines_geojson(self) -> dict:
-        """One LineString per distinct shape used by each route."""
-        s = self.static
-        if not s:
+        """One LineString per distinct shape used by each route. Built once per schedule."""
+        if not self.static:
             return {"type": "FeatureCollection", "features": []}
+        return self._once("lines", self._build_lines)
+
+    def lines_json(self) -> StaticJson:
+        return self._once("lines_json", lambda: StaticJson(
+            self.lines_geojson(), {"X-GTFS-Version": self.static.version if self.static else ""}))
+
+    def _build_lines(self) -> dict:
+        s = self.static
         features = []
         route_shapes: dict[str, set[str]] = {}
         route_longest_trip: dict[str, str] = {}

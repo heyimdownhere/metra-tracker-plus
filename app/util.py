@@ -75,13 +75,13 @@ class _AllowListUnpickler(pickle.Unpickler):
 _PLAIN = frozenset({("datetime", "date"), ("builtins", "frozenset"), ("builtins", "set")})
 
 
-def load_cache_file(path: Path, classes: Iterable[type]) -> Any:
+def load_cache_file(path: Path, classes: Iterable[type], extra: set[tuple[str, str]] | None = None) -> Any:
     """Read a schedule cache written by this app.
 
     Only the given classes (plus dates and sets) may be created while reading,
     so a tampered file in /config can't make the server run code.
     """
-    allowed = _PLAIN | {(c.__module__, c.__qualname__) for c in classes}
+    allowed = _PLAIN | {(c.__module__, c.__qualname__) for c in classes} | (extra or set())
     with path.open("rb") as fh:
         return _AllowListUnpickler(fh, frozenset(allowed)).load()
 
@@ -128,9 +128,11 @@ class SingleFlight:
     """
 
     def __init__(self, fail_ttl: float = 30.0, max_items: int = 500,
-                 failures: tuple[type[BaseException], ...] = (Exception,)):
+                 failures: tuple[type[BaseException], ...] = (Exception,),
+                 forget: tuple[type[BaseException], ...] = ()):
         self.fail_ttl = fail_ttl
         self.failures = failures
+        self.forget = forget  # failures that are passed on but not remembered
         self._items = TTLCache(0, max_items)
         self._flights: dict[str, asyncio.Future] = {}
 
@@ -152,7 +154,8 @@ class SingleFlight:
         try:
             value = await fetch()
         except self.failures as exc:
-            self._items.put(key, (False, exc), self.fail_ttl)
+            if not isinstance(exc, self.forget):
+                self._items.put(key, (False, exc), self.fail_ttl)
             raise
         else:
             self._items.put(key, (True, value), ttl)

@@ -234,7 +234,7 @@ def test_history_records_and_summarises(tracker, tmp_path):
     # Second poll with a smaller delay updates the row but keeps the max.
     _apply(tracker, [_tu("t-0800", [("A", 120)])])
     h.record_observations(tracker._observation_rows(sched_0800 - 300))
-    obs = {(r["trip_id"], r["stop_id"]): r for r in h.iter_observations(3650)}
+    obs = {(r["trip_id"], r["stop_id"]): r for r in h.export_observations(0, 2**40, 10**6)[1]}
     assert obs[("t-0800", "A")]["delay"] == 120 and obs[("t-0800", "A")]["max_delay"] == 600
     stats = h.station_reliability(["A"], 3650, lambda ts: datetime.fromtimestamp(ts, TZ).strftime("%H:%M"))
     by_time = {s["scheduled_time"]: s for s in stats}
@@ -578,7 +578,6 @@ def test_train_arriving_at_terminal_shows_it_as_next_stop(tracker):
 # ---- on-time history on the board ---------------------------------------------
 
 def _seed_history(tracker, tmp_path, days, delays, trip="t-0800", stop="A", hhmm=(8, 0), headsign="Central", route="L1"):
-    from datetime import timedelta
     from app.history import History
 
     h = tracker.history if tracker.history.available else History(tmp_path / "h.db", 365)
@@ -597,7 +596,6 @@ def _seed_history(tracker, tmp_path, days, delays, trip="t-0800", stop="A", hhmm
 
 
 def test_board_shows_on_time_history(tracker, tmp_path):
-    from datetime import timedelta
     # Six previous weekdays (Mon Nov 2 - Fri Nov 6 2026 + Fri Oct 30), real timestamps "now" so the 30-day window covers them.
     days = [date(2026, 11, d) for d in (2, 3, 4, 5, 6)] + [date(2026, 10, 30)]
     _seed_history(tracker, tmp_path, days, [0, 120, 600, 60, 900, "X"])
@@ -805,12 +803,7 @@ def test_map_filter_uses_gps_delay(tracker):
 
 
 def test_settings_refuse_same_home_and_work(tracker, tmp_path, monkeypatch):
-    from fastapi.testclient import TestClient
-    from app import main
-    from app.user_settings import UserSettings
-    monkeypatch.setattr(main, "tracker", tracker)
-    monkeypatch.setattr(main, "user_settings", UserSettings(tmp_path / "settings.json"))
-    c = TestClient(main.app)
+    main, c = _app_with_fixture(tracker, tmp_path, monkeypatch)
     assert c.put("/api/settings", json={"home_station": "A", "work_station": "C"}).status_code == 200
     r = c.put("/api/settings", json={"work_station": "A"})
     assert r.status_code == 400 and "can't both be Alpha" in r.json()["detail"]
