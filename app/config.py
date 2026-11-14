@@ -13,9 +13,13 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .util import mask, read_secret
+
 log = logging.getLogger(__name__)
 
 DEFAULT_PORT = 8080
+# Covers every Metra station (Kenosha to University Park, Harvard to the lake) with margin.
+DEFAULT_BBOX = (-88.75, 41.30, -87.40, 42.70)
 VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
 
 
@@ -44,6 +48,11 @@ def _int_env(name: str, default: int, minimum: int, maximum: int | None = None,
 def _str_env(name: str, default: str | None = None) -> str | None:
     value = os.environ.get(name, "").strip()
     return value or default
+
+
+def _text_env(name: str, default: str) -> str:
+    """Like _str_env, for settings that always have a value."""
+    return os.environ.get(name, "").strip() or default
 
 
 DAY_NAMES = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
@@ -97,37 +106,6 @@ def parse_work_days(value) -> tuple[int, ...] | None:
     return tuple(days)
 
 
-def _read_token(warnings: list[str]) -> str | None:
-    """METRA_API_TOKEN, or the contents of the file named by METRA_API_TOKEN_FILE
-    (for Docker/compose secrets). The variable wins if both are set."""
-    token = _str_env("METRA_API_TOKEN")
-    if token:
-        return token
-    path = _str_env("METRA_API_TOKEN_FILE")
-    if not path:
-        return None
-    try:
-        return Path(path).read_text().strip() or None
-    except OSError as exc:
-        warnings.append(f"METRA_API_TOKEN_FILE={path!r} could not be read ({exc}); running schedule-only")
-        return None
-
-
-def _read_cta_key(warnings: list[str]) -> str | None:
-    """CTA_TRAIN_TRACKER_KEY, or the contents of the file named by CTA_TRAIN_TRACKER_KEY_FILE."""
-    key = _str_env("CTA_TRAIN_TRACKER_KEY")
-    if key:
-        return key
-    path = _str_env("CTA_TRAIN_TRACKER_KEY_FILE")
-    if not path:
-        return None
-    try:
-        return Path(path).read_text().strip() or None
-    except OSError as exc:
-        warnings.append(f"CTA_TRAIN_TRACKER_KEY_FILE={path!r} could not be read ({exc}); CTA uses the schedule only")
-        return None
-
-
 def _bool_env(name: str, default: bool, warnings: list[str]) -> bool:
     raw = (_str_env(name) or "").lower()
     if not raw:
@@ -162,12 +140,17 @@ class Settings:
     map_download: bool = True
     map_source: str | None = None
     map_max_zoom: int = 15
-    map_bbox: tuple[float, float, float, float] = (-88.75, 41.30, -87.40, 42.70)
+    map_bbox: tuple[float, float, float, float] = DEFAULT_BBOX
     map_refresh_days: int = 30
     cta_enabled: bool = True
     cta_api_key: str | None = None
     cta_static_url: str = "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"
     cta_static_check_hours: int = 24
+    cta_history_days: int = 90
+    # Host names the app answers to (empty = any). See README "Security".
+    allowed_hosts: tuple[str, ...] = ()
+    # Most rows one CSV export may return.
+    export_max_rows: int = 250_000
     warnings: tuple[str, ...] = field(default=(), compare=False)
 
     @property
@@ -176,17 +159,14 @@ class Settings:
 
     def summary(self) -> str:
         """Human-readable settings for the startup log. Never prints the token."""
-        token = "not set (schedule-only mode)"
-        if self.api_token:
-            token = f"set ({len(self.api_token)} chars, ends …{self.api_token[-4:]})" if len(self.api_token) > 8 else "set"
         lines = [
-            f"  METRA_API_TOKEN       {token}",
+            f"  METRA_API_TOKEN       {mask(self.api_token, 'not set (schedule-only mode)')}",
             f"  HOST:PORT             {self.host}:{self.port}",
             f"  CONFIG_DIR            {self.config_dir}",
             f"  TZ                    {os.environ.get('TZ', '(container default)')}",
             f"  REALTIME_INTERVAL     {self.realtime_interval}s",
             f"  STATIC_CHECK_INTERVAL {self.static_check_interval}s",
-            f"  STATIC_FULL_REFRESH   " + (f"every {self.static_full_refresh_days} days" if self.static_full_refresh_days else "off"),
+            "  STATIC_FULL_REFRESH   " + (f"every {self.static_full_refresh_days} days" if self.static_full_refresh_days else "off"),
             f"  HISTORY_DAYS          {self.history_days}" + (" (history off)" if self.history_days == 0 else ""),
             f"  HOME_STATION          {self.home_station or '(not set)'}",
             f"  HOME_DESTINATION      {self.home_destination or '(not set)'}",
@@ -195,16 +175,13 @@ class Settings:
             f"  WORK_DAYS             {','.join(DAY_NAMES[d] for d in self.work_days) or '(none)'}",
             f"  MAP_DOWNLOAD          {'on' if self.map_download else 'off'} (zoom 0-{self.map_max_zoom}, refresh every {self.map_refresh_days} days)",
             f"  CTA_ENABLED           {'on' if self.cta_enabled else 'off'}",
-            f"  CTA_TRAIN_TRACKER_KEY {_mask(self.cta_api_key, 'not set (CTA schedule only)')}",
+            f"  CTA_TRAIN_TRACKER_KEY {mask(self.cta_api_key, 'not set (CTA schedule only)')}",
+            f"  CTA_HISTORY_DAYS      {self.cta_history_days}" + (" (CTA history off)" if self.cta_history_days == 0 else ""),
+            f"  ALLOWED_HOSTS         {', '.join(self.allowed_hosts) or '(any)'}",
+            f"  EXPORT_MAX_ROWS       {self.export_max_rows}",
             f"  LOG_LEVEL             {self.log_level}",
         ]
         return "Settings:\n" + "\n".join(lines)
-
-
-def _mask(secret: str | None, unset: str) -> str:
-    if not secret:
-        return unset
-    return f"set ({len(secret)} chars, ends …{secret[-4:]})" if len(secret) > 8 else "set"
 
 
 def load_settings() -> Settings:
@@ -220,29 +197,26 @@ def load_settings() -> Settings:
         warnings.append(f"WORK_DAYS={days_raw!r} isn't like 'mon-fri' or 'mon,wed,fri'; using mon-fri")
         work_days = DEFAULT_WORK_DAYS
     bbox_raw = _str_env("MAP_BBOX")
-    map_bbox = (-88.75, 41.30, -87.40, 42.70)
+    map_bbox = DEFAULT_BBOX
     if bbox_raw:
         try:
             parts = tuple(float(v) for v in bbox_raw.split(","))
             if len(parts) != 4 or not (parts[0] < parts[2] and parts[1] < parts[3]):
                 raise ValueError
-            map_bbox = parts
+            map_bbox = (parts[0], parts[1], parts[2], parts[3])
         except ValueError:
             warnings.append(f"MAP_BBOX={bbox_raw!r} isn't min_lon,min_lat,max_lon,max_lat; using the Metra area")
-    map_dl = (_str_env("MAP_DOWNLOAD", "true") or "true").lower()
-    if map_dl not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
-        warnings.append(f"MAP_DOWNLOAD={map_dl!r} should be true or false; using true")
-        map_dl = "true"
+    hosts = tuple(h.strip().lower() for h in (_str_env("ALLOWED_HOSTS") or "").split(",") if h.strip())
     level = (_str_env("LOG_LEVEL", "INFO") or "INFO").upper()
     if level not in VALID_LOG_LEVELS:
         warnings.append(f"LOG_LEVEL={level!r} is not one of {', '.join(VALID_LOG_LEVELS)}; using INFO")
         level = "INFO"
     return Settings(
-        api_token=_read_token(warnings),
-        config_dir=Path(_str_env("CONFIG_DIR", "/config")),
-        static_url=_str_env("METRA_STATIC_URL", "https://schedules.metrarail.com/gtfs/schedule.zip"),
-        published_url=_str_env("METRA_PUBLISHED_URL", "https://schedules.metrarail.com/gtfs/published.txt"),
-        realtime_base=_str_env("METRA_REALTIME_BASE", "https://gtfspublic.metrarr.com/gtfs/public").rstrip("/"),
+        api_token=read_secret("METRA_API_TOKEN", warnings, "running schedule-only"),
+        config_dir=Path(_text_env("CONFIG_DIR", "/config")),
+        static_url=_text_env("METRA_STATIC_URL", "https://schedules.metrarail.com/gtfs/schedule.zip"),
+        published_url=_text_env("METRA_PUBLISHED_URL", "https://schedules.metrarail.com/gtfs/published.txt"),
+        realtime_base=_text_env("METRA_REALTIME_BASE", "https://gtfspublic.metrarr.com/gtfs/public").rstrip("/"),
         # Metra asks clients not to poll faster than every 30 seconds.
         realtime_interval=_int_env("REALTIME_INTERVAL", 30, 30, 3600, warnings),
         # How often to ask Metra whether a new schedule was published (realtime polling is separate).
@@ -250,7 +224,7 @@ def load_settings() -> Settings:
         # Re-download the whole schedule this often even if Metra says it's unchanged (0 = never).
         static_full_refresh_days=_int_env("STATIC_FULL_REFRESH_DAYS", 7, 0, 365, warnings),
         port=_int_env("PORT", DEFAULT_PORT, 1, 65535, warnings),
-        host=_str_env("HOST", "0.0.0.0"),
+        host=_text_env("HOST", "0.0.0.0"),
         # Days of realtime history to keep in /config/history.db (0 disables).
         history_days=_int_env("HISTORY_DAYS", 365, 0, 3650, warnings),
         home_station=_str_env("HOME_STATION"),
@@ -259,15 +233,20 @@ def load_settings() -> Settings:
         commute_switch_time=switch_time,
         work_days=work_days,
         log_level=level,
-        map_download=map_dl in ("true", "1", "yes", "on"),
+        map_download=_bool_env("MAP_DOWNLOAD", True, warnings),
         map_source=_str_env("MAP_SOURCE"),
         map_max_zoom=_int_env("MAP_MAX_ZOOM", 15, 8, 15, warnings),
         map_bbox=map_bbox,
         map_refresh_days=_int_env("MAP_REFRESH_DAYS", 30, 0, 3650, warnings),
         cta_enabled=_bool_env("CTA_ENABLED", True, warnings),
-        cta_api_key=_read_cta_key(warnings),
-        cta_static_url=_str_env("CTA_STATIC_URL", "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"),
+        cta_api_key=read_secret("CTA_TRAIN_TRACKER_KEY", warnings, "CTA uses the schedule only"),
+        cta_static_url=_text_env("CTA_STATIC_URL", "https://www.transitchicago.com/downloads/sch_data/google_transit.zip"),
         # How often to ask CTA whether its schedule changed (a small request unless it did).
         cta_static_check_hours=_int_env("CTA_STATIC_CHECK_HOURS", 24, 1, 24 * 30, warnings),
+        # Days of CTA history to keep in /config/cta-history.db (0 disables). Kept apart
+        # from HISTORY_DAYS because the L makes about five times as many rows a day.
+        cta_history_days=_int_env("CTA_HISTORY_DAYS", 90, 0, 3650, warnings),
+        allowed_hosts=hosts,
+        export_max_rows=_int_env("EXPORT_MAX_ROWS", 250_000, 1_000, 5_000_000, warnings),
         warnings=tuple(warnings),
     )

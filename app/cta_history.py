@@ -14,11 +14,13 @@ from __future__ import annotations
 
 import logging
 import sqlite3
-import threading
 import time
 from pathlib import Path
+from typing import Iterator
 
+from .cta_schedule import local_hour, service_date, service_day_span
 from .history import day_type
+from .sqlite_store import SqliteStore
 
 log = logging.getLogger(__name__)
 
@@ -27,22 +29,27 @@ LONG_WAIT_EXTRA = 5 * 60   # seconds
 MIN_DAYS = 5               # don't show stats before this many days of data
 MAX_GAP = 2 * 3600         # a longer gap is a break in service or in our data, not a wait
 
+# About 47,000 departures are stored a day, so the layout is kept small: the
+# line/direction is a number (see `groups`), the service date isn't stored
+# (it follows from `t`), and the table is its own index (WITHOUT ROWID).
+# Roughly 50 bytes a row instead of 170.
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS arrivals (
-    service_date TEXT    NOT NULL,   -- YYYY-MM-DD (service day starts 3 AM)
-    station      TEXT    NOT NULL,   -- CTA station id (4xxxx)
-    gkey         TEXT    NOT NULL,   -- line + direction/destination, e.g. G:5
-    run          TEXT    NOT NULL,
-    t            INTEGER NOT NULL,   -- when it left, epoch seconds
-    gap          INTEGER,            -- seconds since the previous train in this group (NULL if unknown)
-    sched_gap    INTEGER,            -- scheduled gap at that time, seconds
-    delayed      INTEGER NOT NULL DEFAULT 0,  -- flagged delayed on the way in
-    tracked      INTEGER NOT NULL DEFAULT 1,  -- 0: filled in between two positions
-    PRIMARY KEY (service_date, station, gkey, run, t)
+CREATE TABLE IF NOT EXISTS groups (
+    id   INTEGER PRIMARY KEY,
+    gkey TEXT NOT NULL UNIQUE          -- line + direction/destination, e.g. G:5
 );
-CREATE INDEX IF NOT EXISTS idx_cta_arr_station ON arrivals (station, gkey, t);
-CREATE INDEX IF NOT EXISTS idx_cta_arr_run ON arrivals (service_date, run);
-CREATE INDEX IF NOT EXISTS idx_cta_arr_t ON arrivals (t);
+CREATE TABLE IF NOT EXISTS arrivals (
+    station   TEXT    NOT NULL,        -- CTA station id (4xxxx)
+    grp       INTEGER NOT NULL,        -- groups.id
+    t         INTEGER NOT NULL,        -- when it left, epoch seconds
+    run       TEXT    NOT NULL,
+    gap       INTEGER,                 -- seconds since the previous train in this group (NULL if unknown)
+    sched_gap INTEGER,                 -- scheduled gap at that time, seconds
+    delayed   INTEGER NOT NULL DEFAULT 0,  -- flagged delayed on the way in
+    tracked   INTEGER NOT NULL DEFAULT 1,  -- 0: filled in between two positions
+    PRIMARY KEY (station, grp, t, run)
+) WITHOUT ROWID;
+CREATE INDEX IF NOT EXISTS idx_cta_arr_time ON arrivals (t);
 
 CREATE TABLE IF NOT EXISTS delays (
     service_date TEXT    NOT NULL,
@@ -58,6 +65,9 @@ CREATE TABLE IF NOT EXISTS delays (
 CREATE INDEX IF NOT EXISTS idx_cta_delays_started ON delays (started);
 """
 
+ARRIVALS = "arrivals a JOIN groups g ON g.id = a.grp"
+EXPORT_COLUMNS = ["service_date", "station", "gkey", "run", "t", "gap", "sched_gap", "delayed", "tracked"]
+
 
 def is_long_wait(gap: int | None, sched_gap: int | None) -> bool:
     if not gap or not sched_gap:
@@ -65,68 +75,83 @@ def is_long_wait(gap: int | None, sched_gap: int | None) -> bool:
     return gap > max(LONG_WAIT_FACTOR * sched_gap, sched_gap + LONG_WAIT_EXTRA)
 
 
-class CtaHistory:
+class CtaHistory(SqliteStore):
+    SCHEMA_VERSION = 2
+    LABEL = "CTA history"
+
     def __init__(self, path: Path, retention_days: int):
-        self.path = path
-        self.retention_days = retention_days
-        self._lock = threading.Lock()
-        self._db: sqlite3.Connection | None = None
+        super().__init__(path, retention_days)
+        self._group_ids: dict[str, int] = {}
 
-    @property
-    def enabled(self) -> bool:
-        return self.retention_days > 0
-
-    @property
-    def available(self) -> bool:
-        return self._db is not None
-
-    def open(self) -> None:
-        if not self.enabled:
+    def _migrate(self, db: sqlite3.Connection, version: int) -> None:
+        columns = {r[1] for r in db.execute("PRAGMA table_info(arrivals)")}
+        if "service_date" not in columns:
+            db.executescript(SCHEMA)
             return
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        db = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
-        db.execute("PRAGMA journal_mode=WAL")
-        db.execute("PRAGMA synchronous=NORMAL")
-        db.executescript(SCHEMA)
-        db.row_factory = sqlite3.Row
-        self._db = db
-        log.info("CTA history database at %s (retention %d days)", self.path, self.retention_days)
+        # Version 1 stored the service date and the group's text in every row,
+        # with three extra indexes. Copy the rows into the small layout.
+        n = db.execute("SELECT COUNT(*) FROM arrivals").fetchone()[0]
+        log.info("CTA history: moving %d rows to the smaller layout (once)", n)
+        db.execute("BEGIN")
+        try:
+            db.execute("ALTER TABLE arrivals RENAME TO arrivals_v1")
+            for index in ("idx_cta_arr_station", "idx_cta_arr_run", "idx_cta_arr_t"):
+                db.execute(f"DROP INDEX IF EXISTS {index}")
+            for statement in SCHEMA.split(";"):
+                if statement.strip():
+                    db.execute(statement)
+            db.execute("INSERT OR IGNORE INTO groups (gkey) SELECT DISTINCT gkey FROM arrivals_v1")
+            db.execute("INSERT OR IGNORE INTO arrivals (station, grp, t, run, gap, sched_gap, delayed, tracked) "
+                       "SELECT v.station, g.id, v.t, v.run, v.gap, v.sched_gap, v.delayed, v.tracked "
+                       "FROM arrivals_v1 v JOIN groups g ON g.gkey = v.gkey")
+            db.execute("DROP TABLE arrivals_v1")
+            db.execute("COMMIT")
+        except Exception:
+            db.execute("ROLLBACK")
+            raise
+        db.execute("VACUUM")  # give the freed space back to the disk
 
-    def close(self) -> None:
-        with self._lock:
-            if self._db:
-                self._db.close()
-                self._db = None
+    def _group_id(self, gkey: str) -> int:
+        """The number stored for a line/direction (made on first use). Call with the lock held."""
+        gid = self._group_ids.get(gkey)
+        if gid is None:
+            self._db.execute("INSERT OR IGNORE INTO groups (gkey) VALUES (?)", (gkey,))
+            gid = self._db.execute("SELECT id FROM groups WHERE gkey = ?", (gkey,)).fetchone()[0]
+            self._group_ids[gkey] = gid
+        return gid
 
     # ---- writes -------------------------------------------------------------------------
     def record_arrivals(self, rows: list[tuple]) -> None:
-        """rows: (service_date, station, gkey, run, t, gap, sched_gap, delayed, tracked)."""
+        """rows: (service_date, station, gkey, run, t, gap, sched_gap, delayed, tracked).
+        The service date isn't stored: it follows from t."""
         if not self._db or not rows:
             return
         with self._lock:
             self._db.execute("BEGIN")
             try:
-                self._db.executemany("INSERT OR IGNORE INTO arrivals VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows)
+                self._db.executemany(
+                    "INSERT OR IGNORE INTO arrivals (station, grp, t, run, gap, sched_gap, delayed, tracked) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    [(station, self._group_id(gkey), t, run, gap, sched_gap, delayed, tracked)
+                     for (_, station, gkey, run, t, gap, sched_gap, delayed, tracked) in rows])
                 self._db.execute("COMMIT")
             except Exception:
                 self._db.execute("ROLLBACK")
+                self._group_ids.clear()
                 raise
 
     def record_delays(self, rows: list[tuple]) -> None:
         """rows: (service_date, route, gkey, run, station, station_name, started, ended).
         The same delay is written again as it goes on; `ended` moves forward."""
-        if not self._db or not rows:
-            return
-        with self._lock:
-            self._db.executemany(
-                "INSERT INTO delays VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT (service_date, run, started) DO UPDATE SET ended = MAX(delays.ended, excluded.ended)",
-                rows)
+        self._write_many(
+            "INSERT INTO delays VALUES (?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT (service_date, run, started) DO UPDATE SET ended = MAX(delays.ended, excluded.ended)",
+            rows)
 
     def last_arrivals(self, since: float) -> list[dict]:
         """Latest departure per (station, group) since a time: lets gaps continue across a restart."""
         return self._query(
-            "SELECT station, gkey, service_date, MAX(t) AS t FROM arrivals WHERE t >= ? GROUP BY station, gkey",
+            f"SELECT a.station, g.gkey, MAX(a.t) AS t FROM {ARRIVALS} WHERE a.t >= ? GROUP BY a.station, a.grp",
             (int(since),))
 
     def prune(self) -> int:
@@ -141,33 +166,41 @@ class CtaHistory:
         return n
 
     # ---- reads --------------------------------------------------------------------------
-    def _query(self, sql: str, params: tuple = ()) -> list[dict]:
-        if not self._db:
-            return []
-        with self._lock:
-            return [dict(r) for r in self._db.execute(sql, params).fetchall()]
+    def _station_rows(self, station: str, since: float) -> list[dict]:
+        rows = self._query(
+            f"SELECT g.gkey, a.t, a.gap, a.sched_gap, a.delayed FROM {ARRIVALS} WHERE a.station = ? AND a.t >= ?",
+            (station, int(since)))
+        for r in rows:
+            r["service_date"] = service_date(r["t"])
+        return rows
+
+    def board_stats(self, station: str, hour: int, kind: str, days: int = 30,
+                    now: float | None = None, hour_fn=local_hour) -> dict[str, dict]:
+        """For every line/direction at a station: how regular it has been around
+        this hour (±1 h) on the same kind of day, over the last `days` days.
+        One query for the whole station. Groups with under MIN_DAYS days of
+        data are left out."""
+        now = time.time() if now is None else now
+        groups: dict[str, list] = {}
+        for r in self._station_rows(station, now - days * 86400):
+            if day_type(r["service_date"]) == kind and abs(hour_fn(r["t"]) - hour) <= 1:
+                groups.setdefault(r["gkey"], []).append(r)
+        out = {}
+        for gkey, rows in groups.items():
+            s = summarize(rows)
+            if s:
+                out[gkey] = s
+        return out
 
     def group_stats(self, station: str, gkey: str, hour: int, kind: str, days: int = 30,
-                    now: float | None = None, hour_fn=None) -> dict | None:
-        """How regular this line/direction has been at this station around this hour
-        (±1 h) on the same kind of day, over the last `days` days. None until
-        MIN_DAYS days of data."""
-        now = time.time() if now is None else now
-        rows = self._query(
-            "SELECT service_date, t, gap, sched_gap, delayed FROM arrivals "
-            "WHERE station = ? AND gkey = ? AND t >= ?",
-            (station, gkey, int(now - days * 86400)))
-        rows = [r for r in rows if day_type(r["service_date"]) == kind and abs(hour_fn(r["t"]) - hour) <= 1]
-        return summarize(rows)
+                    now: float | None = None, hour_fn=local_hour) -> dict | None:
+        """board_stats for one line/direction. None until MIN_DAYS days of data."""
+        return self.board_stats(station, hour, kind, days, now, hour_fn).get(gkey)
 
-    def station_stats(self, station: str, days: int, hour_fn) -> list[dict]:
+    def station_stats(self, station: str, days: int, hour_fn=local_hour) -> list[dict]:
         """Per group, day type and hour: regularity at a station."""
-        rows = self._query(
-            "SELECT service_date, gkey, t, gap, sched_gap, delayed FROM arrivals "
-            "WHERE station = ? AND t >= ?",
-            (station, int(time.time() - days * 86400)))
         groups: dict[tuple, list] = {}
-        for r in rows:
+        for r in self._station_rows(station, time.time() - days * 86400):
             groups.setdefault((r["gkey"], day_type(r["service_date"]), hour_fn(r["t"])), []).append(r)
         out = []
         for (gkey, kind, hour), rs in sorted(groups.items()):
@@ -189,6 +222,10 @@ class CtaHistory:
             params += (route,)
         return self._query(sql + " ORDER BY started DESC LIMIT 500", params)
 
+    def run_delays(self, day: str, run: str) -> list[dict]:
+        """One train's delays on a service day."""
+        return self._query("SELECT * FROM delays WHERE service_date = ? AND run = ? ORDER BY started", (day, run))
+
     def delay_summary(self, days: int) -> list[dict]:
         rows = self._query(
             "SELECT route, COUNT(*) AS delays, SUM(ended - started) AS total, MAX(ended - started) AS longest, "
@@ -198,20 +235,31 @@ class CtaHistory:
                  "avg_minutes": round(r["total"] / r["delays"] / 60, 1) if r["delays"] else None,
                  "longest_minutes": round((r["longest"] or 0) / 60, 1)} for r in rows]
 
-    def run_today(self, service_date: str, run: str) -> list[dict]:
-        """Where one train has been today (stations it left, in order)."""
+    def run_today(self, day: str, run: str) -> list[dict]:
+        """Where one train has been on a service day (stations it left, in order)."""
+        start, end = service_day_span(day)
         return self._query(
-            "SELECT station, gkey, t, tracked FROM arrivals WHERE service_date = ? AND run = ? ORDER BY t",
-            (service_date, run))
+            f"SELECT a.station, g.gkey, a.t, a.tracked FROM {ARRIVALS} "
+            "WHERE a.t >= ? AND a.t < ? AND a.run = ? ORDER BY a.t",
+            (int(start), int(end), run))
 
-    def iter_arrivals(self, days: int):
-        if not self._db:
-            return
-        with self._lock:
-            rows = self._db.execute("SELECT * FROM arrivals WHERE t >= ? ORDER BY t",
-                                    (int(time.time() - days * 86400),)).fetchall()
-        for r in rows:
-            yield dict(r)
+    def export_arrivals(self, since: float, until: float, limit: int,
+                        station: str | None = None) -> tuple[dict, Iterator[dict]]:
+        """Departures in [since, until), oldest first, at most about `limit` rows
+        (the newest ones if there are more), optionally for one station."""
+        where = "a.t >= ? AND a.t < ?"
+        params: tuple = (int(since), int(until))
+        if station:
+            where, params = "a.station = ? AND " + where, (station, *params)
+        info, rows = self._export(ARRIVALS, "a.t", where, params, limit,
+                                  select="a.station, g.gkey, a.run, a.t, a.gap, a.sched_gap, a.delayed, a.tracked")
+
+        def with_date() -> Iterator[dict]:
+            for r in rows:
+                r["service_date"] = service_date(r["t"])
+                yield r
+
+        return info, with_date()
 
 
 def summarize(rows: list[dict], min_days: int = MIN_DAYS) -> dict | None:

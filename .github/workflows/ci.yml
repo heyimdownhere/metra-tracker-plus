@@ -33,11 +33,48 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-      - run: pip install -r requirements-dev.txt
+          cache-dependency-path: |
+            requirements*.txt
+            requirements.lock
+      - run: pip install -r requirements-dev.txt -c requirements.lock
+      - name: Lint
+        run: ruff check .
+      - name: Type check
+        run: mypy
       - run: pytest -q
 
+  # Builds the image and starts it, before anything is published: catches a
+  # broken Dockerfile or entrypoint, and checks the app doesn't run as root.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: next-stop:ci
+          cache-from: type=gha
+      - name: Start it and check
+        run: |
+          mkdir -p appdata && sudo touch appdata/settings.json   # a root-owned file, as older versions left
+          docker run -d --name ns -p 8080:8080 -v "$PWD/appdata:/config" \
+            -e MAP_DOWNLOAD=false -e CTA_ENABLED=false next-stop:ci
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/healthz || true)
+            [ "$code" = 200 ] || [ "$code" = 503 ] && break
+            sleep 2
+          done
+          echo "healthz: $code"; [ "$code" = 200 ] || [ "$code" = 503 ]
+          test "$(docker exec ns stat -c %u /proc/1)" = 99
+          test "$(stat -c %u appdata/settings.json)" = 99
+          curl -sf -I http://127.0.0.1:8080/ | grep -i content-security-policy
+      - if: failure()
+        run: docker logs ns || true
+
   publish:
-    needs: test
+    needs: [test, image]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:

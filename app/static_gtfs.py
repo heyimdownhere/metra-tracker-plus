@@ -21,6 +21,8 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .util import atomic_write, load_cache_file
+
 log = logging.getLogger(__name__)
 
 CACHE_VERSION = 4  # bump when StaticData's fields change
@@ -279,6 +281,8 @@ class StaticData:
             return lat, lon, _bearing(pts[i - 1], pts[i])
         if not a or not b:
             stop = a or b
+            if stop is None:  # neither stop is in stops.txt: put it at the first stop with a position
+                stop = next((self.stops[x[S_STOP]] for x in stops if x[S_STOP] in self.stops), {"lat": 0.0, "lon": 0.0})
             return stop["lat"], stop["lon"], None
         lat = a["lat"] + (b["lat"] - a["lat"]) * frac
         lon = a["lon"] + (b["lon"] - a["lon"]) * frac
@@ -381,6 +385,7 @@ def parse_gtfs_zip(path: Path, version: str) -> StaticData:
     stop_departures: dict[str, list[tuple[int, str, int]]] = {}
     trip_spans: dict[str, tuple[int, int]] = {}
     start_index: dict[tuple[str, int], list[str]] = {}
+    sts: list[tuple]
     for tid, sts in trip_stops.items():
         sts.sort(key=lambda s: s[S_SEQ])
         _fill_missing_times(sts)
@@ -388,11 +393,11 @@ def parse_gtfs_zip(path: Path, version: str) -> StaticData:
         if not timed:
             continue
         trip_spans[tid] = (timed[0][S_DEP], timed[-1][S_ARR])
-        start_index.setdefault((trips[tid][T_ROUTE], timed[0][S_DEP]), []).append(tid)
-        for s in sts[:-1]:  # the final stop is arrival-only
-            if s[S_DEP] is None or s[S_PICKUP] == 1:
+        start_index.setdefault((str(trips[tid][T_ROUTE]), timed[0][S_DEP]), []).append(tid)
+        for x in sts[:-1]:  # the final stop is arrival-only
+            if x[S_DEP] is None or x[S_PICKUP] == 1:
                 continue
-            stop_departures.setdefault(s[S_STOP], []).append((s[S_DEP], tid, s[S_SEQ]))
+            stop_departures.setdefault(x[S_STOP], []).append((x[S_DEP], tid, x[S_SEQ]))
     for deps in stop_departures.values():
         deps.sort()
 
@@ -512,9 +517,9 @@ class StaticCache:
     def load(self) -> StaticData | None:
         """Load the fastest available cached copy."""
         try:
-            with self.pickle_path.open("rb") as fh:
-                payload = pickle.load(fh)
-            if payload.get("cache_version") == CACHE_VERSION:
+            # Only a schedule can come out of this file: a tampered cache can't run code.
+            payload = load_cache_file(self.pickle_path, [StaticData])
+            if isinstance(payload, dict) and payload.get("cache_version") == CACHE_VERSION:
                 data: StaticData = payload["data"]
                 log.info("Loaded cached static GTFS %s from %s", data.version, self.pickle_path)
                 return data
@@ -563,7 +568,7 @@ class StaticCache:
     def stage(self, content: bytes) -> Path:
         """Write a new download next to the current one, without replacing it yet."""
         self.ensure_dir()
-        _atomic_write(self.new_zip, content)
+        atomic_write(self.new_zip, content)
         return self.new_zip
 
     def promote(self, version: str) -> None:
@@ -572,9 +577,9 @@ class StaticCache:
             os.replace(self.zip_path, self.backup_zip)
             old = self.cached_version()
             if old:
-                _atomic_write(self.backup_version, (old + "\n").encode())
+                atomic_write(self.backup_version, (old + "\n").encode())
         os.replace(self.new_zip, self.zip_path)
-        _atomic_write(self.version_path, (version + "\n").encode())
+        atomic_write(self.version_path, (version + "\n").encode())
 
     def discard_staged(self) -> None:
         try:
@@ -582,15 +587,10 @@ class StaticCache:
         except OSError:
             pass
 
-    def save_zip(self, content: bytes, version: str) -> None:
-        self.ensure_dir()
-        _atomic_write(self.zip_path, content)
-        _atomic_write(self.version_path, (version + "\n").encode())
-
     def save_pickle(self, data: StaticData) -> None:
         self.ensure_dir()
         payload = {"cache_version": CACHE_VERSION, "data": data}
-        _atomic_write(self.pickle_path, pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
+        atomic_write(self.pickle_path, pickle.dumps(payload, protocol=pickle.HIGHEST_PROTOCOL))
 
 
 def check_usable(data: StaticData, today: date, days: int = 7) -> str | None:
@@ -602,12 +602,6 @@ def check_usable(data: StaticData, today: date, days: int = 7) -> str | None:
     if not any(data.active_services(today + timedelta(days=i)) for i in range(days)):
         return f"it has no trains running in the next {days} days"
     return None
-
-
-def _atomic_write(path: Path, content: bytes) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_bytes(content)
-    os.replace(tmp, path)
 
 
 def file_digest(path: Path) -> str:

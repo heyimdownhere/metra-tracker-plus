@@ -1,51 +1,48 @@
-"""FastAPI entry point: JSON API + the static web frontend.
+"""FastAPI entry point: the JSON API for each transit system, and the web app.
 
-The browser only ever talks to this server; all Metra requests are made
-server-side (a Metra data-license requirement).
+The browser only ever talks to this server; all Metra and CTA requests are
+made server-side (a Metra data-license requirement).
+
+create_app() builds everything. Each transit system is registered as a
+System (see app/systems.py) and gets its API under /api/<id>/. Metra's is
+also served at /api/... where it has always been.
 """
 
 from __future__ import annotations
 
-import csv
-import hashlib
-import io
-import re
+import asyncio
 import logging
-import time
-from datetime import datetime
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import Body, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.openapi.docs import get_swagger_ui_html
+from fastapi.responses import FileResponse, Response
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .basemap import BaseMap
-from .config import load_settings, parse_switch_time, parse_work_days
+from .commute import commute_leg
+from .config import Settings, load_settings
 from .cta import CtaTracker
 from .cta_api import make_router as make_cta_router
-from .tracker import AmbiguousStation, Tracker, normalize_direction
+from .metra_api import MetraCommute, make_router as make_metra_router
+from .systems import System
+from .tracker import Tracker
 from .user_settings import UserSettings
+from .util import install_redaction, json_response
+from .web import WEB_DIR, BodyLimit, IndexPage, SecurityHeaders, WebFiles
 
-WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-settings = load_settings()
-logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 log = logging.getLogger("metra")
-tracker = Tracker(settings)
-user_settings = UserSettings(settings.config_dir / "settings.json")
-# CTA is kept apart: its own tracker, schedule cache (/config/cta) and settings file.
-cta = CtaTracker(settings.config_dir, settings.cta_api_key, settings.cta_static_url,
-                 check_hours=settings.cta_static_check_hours, enabled=settings.cta_enabled,
-                 history_days=settings.history_days)
-cta_settings = UserSettings(settings.config_dir / "cta-settings.json")
-basemap = BaseMap(settings.config_dir, enabled=settings.map_download, source=settings.map_source,
-                  bbox=settings.map_bbox, max_zoom=settings.map_max_zoom, refresh_days=settings.map_refresh_days)
+
+# How many map fonts/sprites may be fetched from Protomaps at once. Each fetch
+# waits on the network in a worker thread; capping them keeps threads free for
+# the boards.
+ASSET_FETCHES = 4
 
 
-async def _map_loop():
+async def _map_loop(basemap: BaseMap):
     """Download the self-hosted map on first start, then refresh it now and then."""
-    import asyncio
     await asyncio.sleep(5)  # let the schedule download go first
     while True:
         if basemap.needs_download():
@@ -55,484 +52,158 @@ async def _map_loop():
             await asyncio.sleep(6 * 3600)
 
 
-_warned: set[str] = set()
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or load_settings()
+    logging.basicConfig(level=settings.log_level, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    install_redaction()
+
+    tracker = Tracker(settings)
+    commute = MetraCommute(tracker, UserSettings(settings.config_dir / "settings.json"), settings)
+    # CTA is kept apart: its own tracker, schedule cache (/config/cta) and settings file.
+    cta = CtaTracker(settings.config_dir, settings.cta_api_key, settings.cta_static_url,
+                     check_hours=settings.cta_static_check_hours, enabled=settings.cta_enabled,
+                     history_days=settings.cta_history_days)
+    cta_settings = UserSettings(settings.config_dir / "cta-settings.json")
+    basemap = BaseMap(settings.config_dir, enabled=settings.map_download, source=settings.map_source,
+                      bbox=settings.map_bbox, max_zoom=settings.map_max_zoom, refresh_days=settings.map_refresh_days)
+
+    metra_router = make_metra_router(tracker, commute, settings)
+    systems = [
+        System("metra", "Metra", tracker, metra_router, live=settings.realtime_enabled),
+        System("cta", "CTA 'L'", cta, make_cta_router(cta, cta_settings, settings, commute_leg, prefix=""),
+               enabled=settings.cta_enabled, live=bool(settings.cta_api_key)),
+    ]
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        log.info(settings.summary())
+        for warning in settings.warnings:
+            log.warning("Config: %s", warning)
+        for system in systems:
+            if system.enabled:
+                await system.tracker.start()
+        map_task = asyncio.create_task(_map_loop(basemap), name="map")
+        yield
+        map_task.cancel()
+        for system in reversed(systems):
+            if system.enabled:
+                await system.tracker.stop()
+
+    app = FastAPI(title="Next Stop", lifespan=lifespan, docs_url=None, redoc_url=None)
+    app.state.settings = settings
+    app.state.tracker, app.state.cta, app.state.basemap = tracker, cta, basemap
+    app.state.commute, app.state.systems = commute, systems
+
+    # Outermost first: refuse unknown host names, cap request bodies, add the
+    # safety headers, then compress (JSON and the JS/CSS bundles: the map
+    # library alone is ~1 MB, which matters on phone data).
+    app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
+    app.add_middleware(SecurityHeaders)
+    app.add_middleware(BodyLimit, max_bytes=64 * 1024)
+    if settings.allowed_hosts:
+        # The health check inside the container asks for 127.0.0.1.
+        app.add_middleware(TrustedHostMiddleware,
+                           allowed_hosts=[*settings.allowed_hosts, "localhost", "127.0.0.1"])
+
+    # ---- health and the systems list --------------------------------------------------
+    @app.get("/healthz", include_in_schema=False)
+    @app.get("/api/health")
+    def health():
+        """200 once any system can answer; each system's state is listed."""
+        states = [s.summary() for s in systems if s.enabled]
+        ok = any(s["loaded"] for s in states)
+        metra = tracker.static is not None
+        return json_response({
+            "status": "ok" if ok else "starting",
+            "systems": states,
+            # Kept for older clients: Metra's own state.
+            "static_loaded": metra,
+            "mode": "realtime" if settings.realtime_enabled else "schedule-only",
+            "realtime_live": tracker.realtime_live,
+        }, 200 if ok else 503)
+
+    @app.get("/api/systems")
+    def systems_list():
+        """The transit systems this server serves, and where their API is."""
+        return json_response([s.summary() for s in systems])
+
+    @app.get("/api/status")
+    def status():
+        return json_response({**tracker.status(), "map": basemap.status()})
+
+    for system in systems:
+        app.include_router(system.router, prefix=f"/api/{system.id}")
+    # Metra's endpoints where they have always been (Home Assistant sensors use them).
+    app.include_router(metra_router, prefix="/api", include_in_schema=False)
+
+    # ---- self-hosted map ---------------------------------------------------------------
+    @app.get("/api/map")
+    def map_status():
+        """Self-hosted map: state (ready/downloading/missing/error/disabled), size, progress."""
+        return json_response(basemap.status())
+
+    tile_cache = {"Cache-Control": "public, max-age=86400"}
+
+    @app.get("/map/tiles/{z}/{x}/{y}.mvt", include_in_schema=False)
+    def map_tile(z: int, x: int, y: int):
+        data, encoding = basemap.tile(z, x, y)
+        if data is None:
+            return Response(status_code=204, headers=tile_cache)
+        headers = dict(tile_cache)
+        if encoding:
+            headers["Content-Encoding"] = encoding  # already compressed; GZipMiddleware leaves it alone
+        return Response(data, media_type="application/vnd.mapbox-vector-tile", headers=headers)
+
+    asset_fetches = asyncio.Semaphore(ASSET_FETCHES)
+
+    @app.get("/map/assets/{path:path}", include_in_schema=False)
+    async def map_asset(path: str):
+        """Label fonts and icon sprites, fetched once by the server and cached in /config/map."""
+        file = basemap.cached_asset(path)
+        if file is None:
+            async with asset_fetches:
+                file = await asyncio.to_thread(basemap.asset, path)
+        if file is None:
+            raise HTTPException(404, "Not available")
+        media = ("application/x-protobuf" if path.endswith(".pbf")
+                 else "application/json" if path.endswith(".json") else "image/png")
+        return FileResponse(file, media_type=media, headers={"Cache-Control": "public, max-age=604800"})
+
+    # ---- API docs, served from this server (no outside script) ------------------------
+    @app.get("/api/docs", include_in_schema=False)
+    def docs():
+        return get_swagger_ui_html(openapi_url=app.openapi_url, title="Next Stop API",
+                                   swagger_js_url="/vendor/swagger/swagger-ui-bundle.js",
+                                   swagger_css_url="/vendor/swagger/swagger-ui.css",
+                                   swagger_favicon_url="/favicon.svg")
+
+    # ---- web app ------------------------------------------------------------------------
+    page = IndexPage(WEB_DIR)
+
+    @app.get("/", include_in_schema=False)
+    @app.get("/index.html", include_in_schema=False)
+    def index():
+        return page.response()
+
+    app.mount("/", WebFiles(directory=WEB_DIR), name="web")
+    return app
 
 
-def _resolve_env_station(name: str, value: str | None) -> str | None:
-    """Env station values may be an id ("EVANSTON") or a name ("Evanston (Davis St.)")."""
-    if not value:
-        return None
-    try:
-        return tracker.find_station(value)
-    except KeyError:
-        if (name, value) not in _warned:  # warn once, not on every request
-            _warned.add((name, value))
-            log.warning("%s=%r doesn't match a station (or matches several); see /api/stations", name, value)
-        return None
+app = create_app()
+
+# Kept for tests and scripts that reach into the running app.
+tracker: Tracker = app.state.tracker
+cta: CtaTracker = app.state.cta
+basemap: BaseMap = app.state.basemap
+settings: Settings = app.state.settings
 
 
 def profile(now: float | None = None) -> dict:
-    """The commute profile: home, work, switch time and workdays.
-
-    Values saved in the app win; anything not set there falls back to the
-    environment (HOME_STATION, HOME_DESTINATION, WORK_STATION,
-    COMMUTE_SWITCH_TIME, WORK_DAYS). `leg` says which board to open now.
-    """
-    cfg = user_settings.load()
-    loaded = tracker.static is not None
-    out = {}
-    if cfg["home_station"]:
-        out.update(home_station=cfg["home_station"], home_dest=cfg["home_dest"], source="app")
-    elif loaded and settings.home_station:
-        home_id = _resolve_env_station("HOME_STATION", settings.home_station)
-        out.update(home_station=home_id,
-                   home_dest=_resolve_env_station("HOME_DESTINATION", settings.home_destination) if home_id else None,
-                   source="env" if home_id else None)
-    else:
-        out.update(home_station=None, home_dest=None, source=None)
-    if cfg["work_station"]:
-        out.update(work_station=cfg["work_station"], work_source="app")
-    else:
-        work_id = _resolve_env_station("WORK_STATION", settings.work_station) if loaded else None
-        out.update(work_station=work_id, work_source="env" if work_id else None)
-    out["switch_time"] = cfg["switch_time"] or settings.commute_switch_time
-    out["work_days"] = list(cfg["work_days"] if cfg["work_days"] is not None else settings.work_days)
-    out["leg"] = _commute_leg(out, now) if loaded else None
-    return out
+    return app.state.commute.profile(now)
 
 
 def _commute_leg(p: dict, now: float | None = None, tz=None) -> dict | None:
-    """Which trip to show right now.
+    return commute_leg(p, now, tz or (tracker.static.tz if tracker.static else None))
 
-    On a workday with both home and work set: before the switch time it's
-    home -> work, after it work -> home. Otherwise just the home board.
-    """
-    home, work = p["home_station"], p["work_station"]
-    if not home:
-        return None
-    local = datetime.fromtimestamp(time.time() if now is None else now, tz or tracker.static.tz)
-    if work and work != home and local.weekday() in p["work_days"]:
-        if local.strftime("%H:%M") < p["switch_time"]:
-            return {"leg": "to_work", "from": home, "to": work}
-        return {"leg": "to_home", "from": work, "to": home}
-    return {"leg": "home", "from": home, "to": p["home_dest"]}
 
-
-def effective_home() -> dict:
-    """Backwards-compatible alias: the profile (home_station/home_dest/source + work fields)."""
-    return profile()
-
-
-@asynccontextmanager
-async def lifespan(_: FastAPI):
-    log.info(settings.summary())
-    for warning in settings.warnings:
-        log.warning("Config: %s", warning)
-    await tracker.start()
-    await cta.start()
-    import asyncio
-    map_task = asyncio.create_task(_map_loop(), name="map")
-    yield
-    map_task.cancel()
-    await cta.stop()
-    await tracker.stop()
-
-
-app = FastAPI(title="Next Stop", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
-# Compress JSON and the JS/CSS bundles (the map library alone is ~1 MB): keeps
-# phone data use down.
-app.add_middleware(GZipMiddleware, minimum_size=1024, compresslevel=6)
-
-NO_STORE = {"Cache-Control": "no-store"}
-
-
-def _json(data, status: int = 200) -> JSONResponse:
-    return JSONResponse(data, status_code=status, headers=NO_STORE)
-
-
-@app.get("/healthz")
-@app.get("/api/health")
-def health():
-    ok = tracker.static is not None
-    return _json(
-        {
-            "status": "ok" if ok else "starting",
-            "static_loaded": ok,
-            "mode": "realtime" if settings.realtime_enabled else "schedule-only",
-            "realtime_live": tracker.realtime_live,
-        },
-        200 if ok else 503,
-    )
-
-
-@app.get("/api/status")
-def status():
-    return _json({**tracker.status(), "map": basemap.status()})
-
-
-@app.get("/api/stations")
-def stations():
-    return _json(tracker.stations())
-
-
-@app.get("/api/departures")
-def departures(
-    station: str = Query(..., min_length=1),
-    limit: int = Query(5, ge=1, le=50),
-    to: str | None = Query(None, description="Only trains that later stop at this station"),
-    direction: str | None = Query(None, description="inbound/to or outbound/from downtown"),
-    route: str | None = Query(None, description="Only trains on this line (route id, e.g. UP-N)"),
-):
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    try:
-        d = normalize_direction(direction)
-    except ValueError:
-        raise HTTPException(400, "direction must be inbound/to or outbound/from (or omitted for both)")
-    try:
-        return _json(tracker.departures(station, limit, to=to or None, direction=d, route=route or None))
-    except KeyError as exc:
-        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
-
-
-@app.get("/api/destinations")
-def destinations(station: str = Query(..., min_length=1)):
-    """Stations reachable on a direct train from `station`, nearest first (for the Going-to picker)."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    try:
-        return JSONResponse(tracker.destinations(station), headers={"Cache-Control": "public, max-age=3600"})
-    except KeyError as exc:
-        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
-
-
-@app.get("/api/line")
-def line(
-    route: str = Query(..., min_length=1, description="Route id, e.g. UP-N"),
-    direction: str | None = Query(None, description="inbound/to or outbound/from downtown; omit for both"),
-):
-    """Every train on a line still to run today, running ones first."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    try:
-        d = normalize_direction(direction)
-    except ValueError:
-        raise HTTPException(400, "direction must be inbound/to or outbound/from (or omitted for both)")
-    try:
-        return _json(tracker.line_trains(route, d))
-    except KeyError as exc:
-        raise HTTPException(404, f"Unknown line {exc.args[0]!r}")
-
-
-@app.get("/api/trip")
-def trip(trip_id: str = Query(..., min_length=1)):
-    """One train's every stop with scheduled and expected times, and where it is if running."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    try:
-        return _json(tracker.trip_detail(trip_id))
-    except KeyError:
-        raise HTTPException(404, f"Unknown train {trip_id!r}")
-
-
-@app.get("/api/timetable")
-def timetable(
-    station: str = Query(..., min_length=1),
-    to: str | None = Query(None, description="Only trains that later stop at this station"),
-):
-    """Every train still to come today (until 3 AM) from a station, with live times where available."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    try:
-        return _json(tracker.timetable(station, to=to or None))
-    except KeyError as exc:
-        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
-
-
-@app.get("/api/trains")
-def trains(
-    to: str | None = Query(None, description="Only trains that will still stop at this station"),
-    frm: str | None = Query(None, alias="from", description="With `to`: only trains running from this station toward `to`"),
-):
-    try:
-        return _json(tracker.trains(to=to or None, frm=frm or None))
-    except KeyError as exc:
-        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
-
-
-@app.get("/api/alerts")
-def alerts():
-    return _json(tracker.alerts())
-
-
-@app.get("/api/next")
-def next_trains(
-    station: str = Query(..., min_length=1, description="Station id (e.g. EVANSTON) or name"),
-    direction: str | None = Query(
-        None, description="inbound/to (toward downtown), outbound/from (away from downtown); omit for both"
-    ),
-    limit: int = Query(5, ge=1, le=20),
-):
-    """Next trains at a station, optionally only toward or away from downtown."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    try:
-        d = normalize_direction(direction)
-    except ValueError:
-        raise HTTPException(400, "direction must be inbound/to or outbound/from (or omitted for both)")
-    try:
-        return _json(tracker.next_trains(station, d, limit))
-    except AmbiguousStation as exc:
-        opts = ", ".join(f"{o['id']} ({'/'.join(o['lines'])})" for o in exc.options)
-        return _json({
-            "detail": f"{station!r} matches more than one station; use an id: {opts}",
-            "options": exc.options,
-        }, 400)
-    except KeyError:
-        raise HTTPException(404, f"Unknown station {station!r}. See /api/stations for ids.")
-
-
-@app.get("/api/settings")
-def get_settings():
-    """Settings shared by all devices, e.g. the home station.
-
-    `source` says where the home station came from: "app" (saved with
-    "Set as home"), "env" (HOME_STATION), or null (none).
-    """
-    return _json(effective_home())
-
-
-@app.put("/api/settings")
-def put_settings(changes: dict = Body(...)):
-    s = tracker.static
-    if s is None:
-        # Can't validate station ids until the schedule is loaded.
-        raise HTTPException(503, "Schedule not loaded yet")
-    for key in ("home_station", "home_dest", "work_station"):
-        if key in changes:
-            value = changes[key] or None
-            if value is not None and (not isinstance(value, str) or value not in s.stops):
-                raise HTTPException(400, f"Unknown station for {key}: {value!r}")
-            changes[key] = value
-    if "switch_time" in changes and changes["switch_time"] not in (None, ""):
-        parsed = parse_switch_time(str(changes["switch_time"]))
-        if parsed is None:
-            raise HTTPException(400, "switch_time must be a time like 12:00")
-        changes["switch_time"] = parsed
-    elif "switch_time" in changes:
-        changes["switch_time"] = None
-    if "work_days" in changes and changes["work_days"] is not None:
-        parsed_days = parse_work_days(changes["work_days"])
-        if parsed_days is None:
-            raise HTTPException(400, "work_days must be weekdays like [0,1,2,3,4] (Monday = 0) or 'mon-fri'")
-        changes["work_days"] = list(parsed_days)
-    try:
-        before = user_settings.load()
-        user_settings.update(changes)
-        p = profile()
-        if p["home_station"] and p["home_station"] == p["work_station"]:
-            # Home and work (from the app or the environment) can't be the same station.
-            user_settings.update(before)
-            name = tracker.station_label(p["home_station"])
-            raise HTTPException(400, f"Home and work can't both be {name}. Pick a different station for one of them.")
-        return _json(effective_home())
-    except OSError as exc:
-        raise HTTPException(500, f"Could not save settings: {exc}")
-
-
-def _board(from_id: str, to_id: str | None, limit: int, extra: dict | None = None):
-    try:
-        board = tracker.departures(from_id, limit, to=to_id or None)
-    except KeyError as exc:
-        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
-    return _json({**board, **(extra or {})})
-
-
-@app.get("/api/home")
-def home(limit: int = Query(5, ge=1, le=50)):
-    """Departure board for the home station (to its home destination, if set)."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    p = profile()
-    if not p["home_station"]:
-        raise HTTPException(404, "No home station set (use 'Set as home' in the app, or HOME_STATION)")
-    return _board(p["home_station"], p["home_dest"], limit)
-
-
-@app.get("/api/work")
-def work(limit: int = Query(5, ge=1, le=50)):
-    """Departure board for the trip home from work (work station -> home station)."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    p = profile()
-    if not p["work_station"]:
-        raise HTTPException(404, "No work station set (use 'Set as work' in the app, or WORK_STATION)")
-    return _board(p["work_station"], p["home_station"], limit)
-
-
-@app.get("/api/now")
-def now_board(limit: int = Query(5, ge=1, le=50)):
-    """The board for right now: home -> work before the switch time on workdays,
-    work -> home after it, otherwise the home board. `leg` says which."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    leg = profile()["leg"]
-    if not leg:
-        raise HTTPException(404, "No home station set (use 'Set as home' in the app, or HOME_STATION)")
-    return _board(leg["from"], leg["to"], limit, {"leg": leg["leg"]})
-
-
-@app.get("/api/commute")
-def commute(
-    from_: str = Query(..., alias="from", min_length=1, description="Origin station id"),
-    to: str = Query(..., min_length=1, description="Destination station id"),
-    limit: int = Query(3, ge=1, le=10),
-):
-    """Next trains from one station to another. Designed for Home Assistant's REST sensor."""
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    try:
-        return _json(tracker.commute(from_, to, limit))
-    except KeyError as exc:
-        raise HTTPException(404, f"Unknown station {exc.args[0]!r}")
-
-
-def _require_history():
-    if not tracker.history.available:
-        raise HTTPException(404, "History is disabled (needs METRA_API_TOKEN and HISTORY_DAYS > 0)")
-
-
-@app.get("/api/history/station")
-def history_station(station: str = Query(..., min_length=1), days: int = Query(30, ge=1, le=3650)):
-    """On-time performance at a station, per scheduled departure."""
-    _require_history()
-    if tracker.static is None:
-        raise HTTPException(503, "Schedule not loaded yet")
-    try:
-        stop_ids = tracker.station_stops(station)
-    except KeyError:
-        raise HTTPException(404, f"Unknown station {station!r}")
-    tz = tracker.static.tz
-    return _json({
-        "station": station,
-        "days": days,
-        "departures": tracker.history.station_reliability(
-            stop_ids, days, lambda ts: datetime.fromtimestamp(ts, tz).strftime("%H:%M")
-        ),
-    })
-
-
-@app.get("/api/history/alerts")
-def history_alerts(days: int = Query(30, ge=1, le=3650)):
-    _require_history()
-    return _json(tracker.history.alerts(days))
-
-
-@app.get("/api/history/export.csv")
-def history_export(days: int = Query(30, ge=1, le=3650)):
-    """Raw observations as CSV, for spreadsheets or long-term archiving."""
-    _require_history()
-    tz = tracker.static.tz if tracker.static else None
-    cols = ["service_date", "trip_id", "stop_id", "route_id", "headsign", "stop_sequence",
-            "scheduled", "predicted", "delay", "max_delay", "cancelled", "delay_reason"]
-
-    def gen():
-        buf = io.StringIO()
-        w = csv.writer(buf)
-        w.writerow(cols)
-        for r in tracker.history.iter_observations(days):
-            for k in ("scheduled", "predicted"):
-                if r[k] is not None:
-                    r[k] = datetime.fromtimestamp(r[k], tz).isoformat(timespec="seconds")
-            w.writerow([r[c] for c in cols])
-            if buf.tell() > 65536:
-                yield buf.getvalue()
-                buf.seek(0)
-                buf.truncate()
-        yield buf.getvalue()
-
-    return StreamingResponse(
-        gen(), media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="metra-history-{days}d.csv"'},
-    )
-
-
-@app.get("/api/lines")
-def lines():
-    data = tracker.lines_geojson()
-    version = tracker.static.version if tracker.static else ""
-    return JSONResponse(data, headers={"Cache-Control": "public, max-age=300", "X-GTFS-Version": version})
-
-
-app.include_router(make_cta_router(cta, cta_settings, settings, _commute_leg))
-
-
-# ---- self-hosted map ---------------------------------------------------------------
-@app.get("/api/map")
-def map_status():
-    """Self-hosted map: state (ready/downloading/missing/error/disabled), size, progress."""
-    return _json(basemap.status())
-
-
-@app.get("/map/tiles/{z}/{x}/{y}.mvt", include_in_schema=False)
-def map_tile(z: int, x: int, y: int):
-    data, encoding = basemap.tile(z, x, y)
-    if data is None:
-        return Response(status_code=204, headers={"Cache-Control": "public, max-age=86400"})
-    headers = {"Cache-Control": "public, max-age=86400"}
-    if encoding:
-        headers["Content-Encoding"] = encoding  # already compressed; GZipMiddleware leaves it alone
-    return Response(data, media_type="application/vnd.mapbox-vector-tile", headers=headers)
-
-
-@app.get("/map/assets/{path:path}", include_in_schema=False)
-def map_asset(path: str):
-    """Label fonts and icon sprites, fetched once by the server and cached in /config/map."""
-    file = basemap.asset(path)
-    if file is None:
-        raise HTTPException(404, "Not available")
-    media = ("application/x-protobuf" if path.endswith(".pbf")
-             else "application/json" if path.endswith(".json") else "image/png")
-    return FileResponse(file, media_type=media, headers={"Cache-Control": "public, max-age=604800"})
-
-
-# ---- web app --------------------------------------------------------------------------
-# index.html links each script/stylesheet as "file?v=<content hash>", so the browser
-# can keep those files for a year and only fetches one again after it changes.
-ASSET_REF = re.compile(r'(?P<attr>(?:src|href))="(?P<path>[^"?#:]+\.(?:js|css))"')
-_index_cache: dict = {}
-
-
-def _versioned_index() -> bytes:
-    page = WEB_DIR / "index.html"
-    files = [page] + [WEB_DIR / m.group("path") for m in ASSET_REF.finditer(page.read_text())]
-    key = tuple((f, f.stat().st_mtime_ns) for f in files if f.exists())
-    if _index_cache.get("key") != key:
-        def stamp(m: re.Match) -> str:
-            f = WEB_DIR / m.group("path")
-            if not f.is_file():
-                return m.group(0)
-            digest = hashlib.sha1(f.read_bytes()).hexdigest()[:10]
-            return f'{m.group("attr")}="{m.group("path")}?v={digest}"'
-        _index_cache.update(key=key, body=ASSET_REF.sub(stamp, page.read_text()).encode())
-    return _index_cache["body"]
-
-
-@app.get("/", include_in_schema=False)
-@app.get("/index.html", include_in_schema=False)
-def index():
-    return Response(_versioned_index(), media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-cache"})
-
-
-class WebFiles(StaticFiles):
-    """Static files: versioned links (?v=) are cached for a year, anything else is re-checked."""
-
-    async def get_response(self, path, scope):
-        response = await super().get_response(path, scope)
-        if response.status_code in (200, 304):
-            versioned = b"v=" in scope.get("query_string", b"")
-            response.headers["Cache-Control"] = "public, max-age=31536000, immutable" if versioned else "no-cache"
-        return response
-
-
-app.mount("/", WebFiles(directory=WEB_DIR), name="web")
+__all__ = ["app", "create_app", "tracker", "cta", "basemap", "settings", "profile", "Path"]
