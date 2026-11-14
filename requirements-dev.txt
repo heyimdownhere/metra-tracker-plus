@@ -1,4 +1,5 @@
 -r requirements.txt
-pytest>=8
-ruff>=0.6
-mypy>=1.11
+# Exact versions, so a new release can't fail CI by surprise; Dependabot proposes updates.
+pytest==9.2.0
+ruff==0.17.5
+mypy==2.4.1
