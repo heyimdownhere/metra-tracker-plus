@@ -274,6 +274,7 @@
   });
   // Timetable tab: a strip of lines on top; "My station" goes back to the station timetable.
   function renderTtHead() {
+    if (CTA.active()) return CTA.renderTtHead();
     const focus = state.ttLine ? state.ttLine.route : null;
     const chip = (id, label, color) => `<button type="button" class="line-chip${focus === id ? " on" : ""}" data-route="${esc(id || "")}" role="tab" aria-selected="${focus === id}">${color ? `<i style="background:${esc(color)}"></i>` : ""}${esc(label)}</button>`;
     $("tt-line-pin").innerHTML = chip(null, "📍 Station", null);
@@ -285,6 +286,7 @@
     const b = e.target.closest(".line-chip");
     if (!b) return;
     const rid = b.dataset.route || null;
+    if (CTA.active()) return CTA.setTtLine(rid);
     if (rid === (state.ttLine ? state.ttLine.route : null)) return;
     setTtLine(rid);
   });
@@ -1202,7 +1204,8 @@
 
   // ---------- train detail sheet (double-tap any train) ----------
   // Opens half-height: a summary and the timeline around the train; drag up for every stop.
-  const sheet = { trip: null, mode: "closed", data: null, timer: null, firstRender: false };
+  // follow: keep the train in view as it moves down the list, until you scroll the list yourself.
+  const sheet = { trip: null, mode: "closed", data: null, timer: null, firstRender: false, follow: true };
   const SHEET = { half: () => Math.round(window.innerHeight * 0.46), full: () => 0 };
   function sheetY(mode) { return mode === "full" ? SHEET.full() : mode === "half" ? SHEET.half() : window.innerHeight; }
   function setSheetMode(mode, { animate = true } = {}) {
@@ -1220,6 +1223,7 @@
     clearTimeout(deferScroll.t);  // a double-tap: stay where you are
     sheet.trip = tripId;
     sheet.firstRender = true;
+    sheet.follow = true;
     if (sheet.data && sheet.data.trip_id === tripId) renderTrip(sheet.data);  // seen it: show it now, refresh below
     else { sheet.data = null; $("ts-head").innerHTML = '<p class="muted">Loading…</p>'; $("ts-tl").innerHTML = ""; }
     const wrap = $("trip-sheet");
@@ -1313,13 +1317,27 @@
     $("ts-tl").innerHTML = rows.join("");
     $("ts-panel").style.setProperty("--line", d.color || "var(--accent)");
     renderSheetMore();
-    if (sheet.firstRender) {
+    // Only once the sheet is on screen: a hidden list can't be scrolled (reopening a train
+    // draws the saved copy before the sheet appears).
+    if ((sheet.firstRender || sheet.follow) && !$("trip-sheet").hidden) {
       sheet.firstRender = false;
-      // Open with the train (or the next stop) near the top: a stop or two behind it stays visible.
-      const sc = $("ts-scroll");
-      const at = $("ts-tl").querySelector(".ts-now") || $("ts-tl").querySelector(".ts-st.next");
-      sc.scrollTop = at ? Math.max(0, at.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 84) : 0;
+      scrollToTrain(d);
     }
+  }
+
+  // Put the train (or the next stop) near the top of the list, with a stop or two behind it
+  // still showing. A train that has arrived shows the end of the list; one that hasn't left
+  // yet, the start.
+  function scrollToTrain(d) {
+    const sc = $("ts-scroll"), tl = $("ts-tl");
+    const finished = !d.running && d.stops.length && d.stops[d.stops.length - 1].time < serverNow();
+    const at = tl.querySelector(".ts-now") || tl.querySelector(".ts-st.next") || (finished ? tl.lastElementChild : null);
+    const top = at ? Math.max(0, at.getBoundingClientRect().top - sc.getBoundingClientRect().top + sc.scrollTop - 84) : 0;
+    if (Math.abs(sc.scrollTop - top) > 2) sc.scrollTop = top;
+  }
+  // Scrolling the list yourself stops it following the train (until the sheet is opened again).
+  for (const ev of ["wheel", "touchmove", "keydown"]) {
+    $("ts-scroll").addEventListener(ev, () => { sheet.follow = false; }, { passive: true });
   }
 
   // Drag the header: up for full height, down to half or to close.
@@ -1496,9 +1514,9 @@
     btn.classList.toggle("icon-only", !pickersOpen);
     btn.setAttribute("aria-expanded", String(show));
     if (CTA.active()) {
-      // CTA has its own station boxes; Metra's line timetables and "Trains to" chip don't apply.
+      // CTA has its own station boxes and its own line chips (lines at the station).
       $("picker").hidden = true;
-      $("tt-head").hidden = true;
+      if (state.tab === "timetable") { CTA.renderTtHead(); $("tt-head").hidden = false; } else $("tt-head").hidden = true;
       $("map-clear").hidden = true;
       document.body.classList.remove("tt-line-mode");
       btn.hidden = false;
@@ -1924,7 +1942,7 @@
 
   // The CTA side (cta.js) shares these; it takes over the board and map while it's on.
   CTA.init({
-    api, esc, chip, enter, toast, fmtTime, bigTime, serverNow, mapView, applyView, showEmpty, renderMapHead,
+    api, esc, chip, enter, toast, fmtTime, fmtDateTime, bigTime, untilText, serverNow, mapView, applyView, showEmpty, renderMapHead,
     tab: () => state.tab,
     selectedTrip: () => state.selectedTrip,
     pickersShown: () => state.tab === "timetable" || view.pickers !== "hide" || pickersOpen,
